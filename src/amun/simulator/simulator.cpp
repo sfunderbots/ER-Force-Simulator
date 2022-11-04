@@ -1506,6 +1506,12 @@ void Simulator::handleCommandWrapper(const Command &command) {
         // we set to nullptr in our custom constructor
         command->mutable_simulator()->clear_enable();
     }
+    // Robots must be enabled and charged in order to kick
+    if(!command->has_transceiver()) {
+        *command->mutable_transceiver() = amun::CommandTransceiver();
+    }
+    command->mutable_transceiver()->set_enable(true);
+    command->mutable_transceiver()->set_charge(true);
 
     handleCommand(command);
 }
