@@ -21,22 +21,20 @@
 #ifndef SIMULATOR_H
 #define SIMULATOR_H
 
-//#include "core/timer.h"
 #include "protobuf/command.h"
 #include "protobuf/status.h"
 #include "protobuf/sslsim.h"
-#include "protobuf/ssl_vision_detection_tracked.pb.h"
-#include <QFile>
 #include <QList>
 #include <QMap>
 #include <QPair>
 #include <QQueue>
 #include <QByteArray>
 #include <tuple>
-#include <list>
 #include <random>
+#include <list>
+#include <QFile>
 #include <google/protobuf/text_format.h>
-
+#include "protobuf/ssl_vision_detection_tracked.pb.h"
 #include "protobuf/ssl_simulation_robot_control.pb.h"
 #include "protobuf/ssl_simulation_robot_feedback.pb.h"
 #include "protobuf/ssl_simulation_config.pb.h"
@@ -65,44 +63,6 @@ namespace camun {
             YELLOW,
             CONFIG
         };
-    }
-}
-
-namespace {
-    amun::SimulatorSetup loadSetupFromFile(std::string absolute_filepath) {
-        QFile file(QString::fromStdString(absolute_filepath));
-        if (!file.open(QFile::ReadOnly))
-        {
-            std::cerr <<
-                      "Could not open configuration file " << absolute_filepath
-                      << std::endl;
-        }
-
-        QString str = file.readAll();
-        file.close();
-
-        std::string s = qPrintable(str);
-        google::protobuf::TextFormat::Parser parser;
-        amun::SimulatorSetup er_force_sim_setup;
-        parser.ParseFromString(s, &er_force_sim_setup);
-        return er_force_sim_setup;
-    }
-
-    inline bool loadConfiguration(const std::string absolute_filepath, google::protobuf::Message *message, bool allowPartial)
-    {
-        QFile file(QString::fromStdString(absolute_filepath));
-        if (!file.open(QFile::ReadOnly)) {
-            std::cout <<"Could not open configuration file "<<absolute_filepath<<std::endl;
-            return false;
-        }
-        QString str = file.readAll();
-        file.close();
-        std::string s = qPrintable(str);
-
-        google::protobuf::TextFormat::Parser parser;
-        parser.AllowPartialMessage(allowPartial);
-        parser.ParseFromString(s, message);
-        return true;
     }
 }
 

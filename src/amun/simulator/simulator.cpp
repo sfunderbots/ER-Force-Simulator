@@ -106,6 +106,32 @@ static void simulatorTickCallback(btDynamicsWorld *world, btScalar timeStep)
     sim->handleSimulatorTick(timeStep);
 }
 
+namespace {
+    inline bool loadConfiguration(const std::string absolute_filepath, google::protobuf::Message *message, bool allowPartial)
+    {
+        QFile file(QString::fromStdString(absolute_filepath));
+        if (!file.open(QFile::ReadOnly)) {
+            std::cout <<"Could not open configuration file "<<absolute_filepath<<std::endl;
+            return false;
+        }
+        QString str = file.readAll();
+        file.close();
+        std::string s = qPrintable(str);
+
+        google::protobuf::TextFormat::Parser parser;
+        parser.AllowPartialMessage(allowPartial);
+        parser.ParseFromString(s, message);
+        return true;
+    }
+    amun::SimulatorSetup loadSetupFromFile(std::string absolute_filepath) {
+        amun::SimulatorSetup er_force_sim_setup;
+        if(!loadConfiguration(absolute_filepath, &er_force_sim_setup, true)) {
+            throw std::runtime_error("Unable to load simulator setup config file");
+        }
+        return er_force_sim_setup;
+    }
+}
+
 Simulator::Simulator(std::string geometry_config_absolute_filepath, std::string realism_config_absolute_filepath) : Simulator(nullptr, loadSetupFromFile(geometry_config_absolute_filepath), true){
     Command command(new amun::Command);
     if (!loadConfiguration(realism_config_absolute_filepath, command->mutable_simulator()->mutable_realism_config(), true)) {
@@ -183,7 +209,7 @@ Simulator::Simulator(const Timer *timer, const amun::SimulatorSetup &setup, bool
 
     // no robots after initialisation
 
-//    connect(timer, &Timer::scalingChanged, this, &Simulator::setScaling);
+    connect(timer, &Timer::scalingChanged, this, &Simulator::setScaling);
 }
 
 // does delete all Simrobots in the RobotMap, does not clear map
