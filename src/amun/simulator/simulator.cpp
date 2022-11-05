@@ -35,6 +35,7 @@
 #include <algorithm>
 #include <QtDebug>
 #include <QVector>
+#include <utility>
 
 using namespace camun::simulator;
 
@@ -106,33 +107,34 @@ static void simulatorTickCallback(btDynamicsWorld *world, btScalar timeStep)
     sim->handleSimulatorTick(timeStep);
 }
 
-namespace {
-    inline bool loadConfiguration(const std::string absolute_filepath, google::protobuf::Message *message, bool allowPartial)
-    {
-        QFile file(QString::fromStdString(absolute_filepath));
-        if (!file.open(QFile::ReadOnly)) {
-            std::cout <<"Could not open configuration file "<<absolute_filepath<<std::endl;
-            return false;
-        }
-        QString str = file.readAll();
-        file.close();
-        std::string s = qPrintable(str);
+// Copied from src/core/include/core/configuration.h
+// Modified to take absolute filepaths
+bool loadConfiguration(const std::string& absolute_filepath, google::protobuf::Message *message, bool allowPartial)
+{
+    QFile file(QString::fromStdString(absolute_filepath));
+    if (!file.open(QFile::ReadOnly)) {
+        std::cout <<"Could not open configuration file "<<absolute_filepath<<std::endl;
+        return false;
+    }
+    QString str = file.readAll();
+    file.close();
+    std::string s = qPrintable(str);
 
-        google::protobuf::TextFormat::Parser parser;
-        parser.AllowPartialMessage(allowPartial);
-        parser.ParseFromString(s, message);
-        return true;
-    }
-    amun::SimulatorSetup loadSetupFromFile(std::string absolute_filepath) {
-        amun::SimulatorSetup er_force_sim_setup;
-        if(!loadConfiguration(absolute_filepath, &er_force_sim_setup, true)) {
-            throw std::runtime_error("Unable to load simulator setup config file");
-        }
-        return er_force_sim_setup;
-    }
+    google::protobuf::TextFormat::Parser parser;
+    parser.AllowPartialMessage(allowPartial);
+    parser.ParseFromString(s, message);
+    return true;
 }
 
-Simulator::Simulator(std::string geometry_config_absolute_filepath, std::string realism_config_absolute_filepath) : Simulator(nullptr, loadSetupFromFile(geometry_config_absolute_filepath), true){
+amun::SimulatorSetup loadSetupFromFile(const std::string& absolute_filepath) {
+    amun::SimulatorSetup er_force_sim_setup;
+    if(!loadConfiguration(absolute_filepath, &er_force_sim_setup, true)) {
+        throw std::runtime_error("Unable to load simulator setup config file");
+    }
+    return er_force_sim_setup;
+}
+
+Simulator::Simulator(std::string geometry_config_absolute_filepath, const std::string& realism_config_absolute_filepath) : Simulator(nullptr, loadSetupFromFile(geometry_config_absolute_filepath), true){
     Command command(new amun::Command);
     if (!loadConfiguration(realism_config_absolute_filepath, command->mutable_simulator()->mutable_realism_config(), true)) {
         throw std::runtime_error("Unable to load realism config file");
@@ -1007,6 +1009,8 @@ void Simulator::stepSimulation(float time_s) {
 }
 
 sslsim::RobotControlResponse Simulator::handleRobotControl(const sslsim::RobotControl& msg, bool is_blue) {
+    // Copied from the process() function
+
     // collect radio_responses from robots
     QList<robot::RadioResponse> radio_responses;
     for (const sslsim::RobotCommand& command : msg.robot_commands()) {
@@ -1103,9 +1107,8 @@ std::vector<SerializedMsg> Simulator::getAndClearSerializedErrors() {
     return errors;
 }
 
-std::vector<SSL_WrapperPacket> Simulator::getSslWrapperPackets(bool add_noise) {
+std::vector<SSL_WrapperPacket> Simulator::getSslWrapperPackets() {
     // Copied from createVisionPacket, just without the serialization at the end
-    // and with an extra condition around adding any noise/variation
     const std::size_t numCameras = m_data->reportedCameraSetup.size();
     world::SimulatorState simState;
     simState.set_time(m_time);
@@ -1119,7 +1122,7 @@ std::vector<SSL_WrapperPacket> Simulator::getSslWrapperPackets(bool add_noise) {
     m_data->ball->writeBallState(ball);
 
     const btVector3 ballPosition = m_data->ball->position() / SIMULATOR_SCALE;
-    if (m_time - m_lastBallSendTime >= m_minBallDetectionTime && add_noise) {
+    if (m_time - m_lastBallSendTime >= m_minBallDetectionTime) {
         m_lastBallSendTime = m_time;
 
         for (std::size_t cameraId = 0; cameraId < numCameras; ++cameraId) {
@@ -1152,7 +1155,7 @@ std::vector<SSL_WrapperPacket> Simulator::getSslWrapperPackets(bool add_noise) {
             auto* robotProto = teamIsBlue ? simState.add_blue_robots() : simState.add_yellow_robots();
             robot->update(robotProto, m_data->ball);
 
-            if (m_time - robot->getLastSendTime() >= m_minRobotDetectionTime && add_noise) {
+            if (m_time - robot->getLastSendTime() >= m_minRobotDetectionTime) {
                 const float timeDiff = (m_time - robot->getLastSendTime()) * 1E-9;
                 const btVector3 robotPos = robot->position() / SIMULATOR_SCALE;
 
@@ -1252,16 +1255,14 @@ constexpr int functionToFixForSpecs = __LINE__;
 template<class T>
 static bool convertSpecsToErForce(T outGen, const sslsim::RobotSpecs& in) // @return false: Error occured
 {
+    // Copied from src/simulator/simulator.cpp
     if (!in.has_mass()) {
-        std::cout << "\n\n1" << std::endl;
         return false;
     }
     if (!in.has_limits()) {
-        std::cout << "\n\n2" << std::endl;
         return false;
     }
     if (!in.has_center_to_dribbler()) {
-        std::cout << "\n\n3" << std::endl;
         return false;
     }
     sslsim::RobotSpecErForce rsef;
@@ -1273,51 +1274,40 @@ static bool convertSpecsToErForce(T outGen, const sslsim::RobotSpecs& in) // @re
         }
     }
     if (!rsefInitialized) {
-        std::cout << "\n\n4" << std::endl;
         return false;
     }
     if (!rsef.has_shoot_radius()) {
-        std::cout << "\n\n5" << std::endl;
         return false;
     }
     /*if (!rsef.has_dribbler_height()) {
         return false;
     }*/
     if (!rsef.has_dribbler_width()) {
-        std::cout << "\n\n6" << std::endl;
         return false;
     }
     const sslsim::RobotLimits& lim = in.limits();
     if (!lim.has_acc_speedup_absolute_max()) {
-        std::cout << "\n\n7" << std::endl;
         return false;
     }
     if (!lim.has_acc_speedup_angular_max()) {
-        std::cout << "\n\n8" << std::endl;
         return false;
     }
     if (!lim.has_acc_brake_absolute_max()) {
-        std::cout << "\n\n9" << std::endl;
         return false;
     }
     if (!lim.has_acc_brake_angular_max()) {
-        std::cout << "\n\n10" << std::endl;
         return false;
     }
     if (!lim.has_vel_absolute_max()) {
-        std::cout << "\n\n11" << std::endl;
         return false;
     }
     if (!lim.has_vel_angular_max()) {
-        std::cout << "\n\n12" << std::endl;
         return false;
     }
     if (!in.id().has_id()) {
-        std::cout << "\n\n13" << std::endl;
         return false;
     }
     if (!in.id().has_team()) {
-        std::cout << "\n\n14" << std::endl;
         return false;
     }
     robot::Specs* out = outGen(in.id().team() == gameController::BLUE);
@@ -1391,7 +1381,9 @@ enum class SimErrorSource {
     YELLOW_TEAM,
 };
 
-static void setError(sslsim::SimulatorError* error, SimError code, SimErrorSource source, std::string appendix = "") {
+static void setError(sslsim::SimulatorError* error, SimError code, SimErrorSource source, const std::string& appendix = "") {
+    // Copied from src/simulator/simulator.cpp : setError
+    // Replaced logs with printouts
     const char* codeStr = nullptr;
     std::string message;
     switch(code) {
@@ -1416,10 +1408,10 @@ static void setError(sslsim::SimulatorError* error, SimError code, SimErrorSourc
             message = "The received realism is not conforming to the realism configuration for this simulator " + appendix;
             break;
         default:
-//            log(stderr, "Unmanaged SimError for message\n");
+            std::cerr << "Unmanaged SimError for message" << std::endl;
             break;
     }
-    if (!codeStr || message.size() == 0) {
+    if (!codeStr || message.empty()) {
         return;
     }
     error->set_code(codeStr);
@@ -1437,13 +1429,14 @@ static void setError(sslsim::SimulatorError* error, SimError code, SimErrorSourc
                 return "INVALID";
         }
     }();
-
-//    log(stderr, "[%-10s - %-15s] %s\n", sourceStr, codeStr, message.c_str());
 }
 
 #define SCALE_UP(OBJ, ATTR) do{if((OBJ).has_##ATTR()) (OBJ).set_##ATTR((OBJ).ATTR() * 1e3);} while(0)
 
-sslsim::SimulatorResponse Simulator::handleSimulatorCommand(sslsim::SimulatorCommand simcom, bool is_blue) {
+sslsim::SimulatorResponse Simulator::handleSimulatorCommand(const sslsim::SimulatorCommand& simcom, bool is_blue) {
+    // Copied from src/simulator/simulator.cpp : SimulatorCommandAdaptor::handleDatagrams
+    // Replaced `emit sendCommand()` with our handleCommandWrapper() and replaced logs
+    // with printout
     sslsim::SimulatorResponse response;
     if (simcom.has_control()) {
         Command c{new amun::Command};
@@ -1465,7 +1458,6 @@ sslsim::SimulatorResponse Simulator::handleSimulatorCommand(sslsim::SimulatorCom
             SCALE_UP(robot, v_y);
         }
         handleCommandWrapper(c);
-//        emit sendCommand(c);
     }
     if (simcom.has_config()) {
         const auto& config{simcom.config()};
@@ -1476,11 +1468,9 @@ sslsim::SimulatorResponse Simulator::handleSimulatorCommand(sslsim::SimulatorCom
             convertFromSSlGeometry(config.geometry().field(), *(setup->mutable_geometry()));
             setup->mutable_camera_setup()->CopyFrom(config.geometry().calib());
             handleCommandWrapper(c);
-//            emit sendCommand(c);
         }
 
         if (config.robot_specs_size() > 0) {
-            std::cout << "have robot specs" << std::endl;
             Command c{new amun::Command};
             robot::Team* blueTeam = nullptr;
             robot::Team* yellowTeam = nullptr;
@@ -1506,9 +1496,7 @@ sslsim::SimulatorResponse Simulator::handleSimulatorCommand(sslsim::SimulatorCom
                 }
             }
             std::cout << "handling specs command" << std::endl;
-//            log(stdout, "Updated to %d robots\n", newSz);
             handleCommandWrapper(c);
-//            emit sendCommand(c);
         }
         if (config.has_realism_config()) {
             for(const auto& c : config.realism_config().custom()) {
@@ -1517,7 +1505,6 @@ sslsim::SimulatorResponse Simulator::handleSimulatorCommand(sslsim::SimulatorCom
                     Command c{new amun::Command};
                     c->mutable_simulator()->mutable_realism_config()->CopyFrom(rcef);
                     handleCommandWrapper(c);
-//                    emit sendCommand(c);
                 }
             }
         }
@@ -1541,7 +1528,8 @@ void Simulator::handleCommandWrapper(const Command &command) {
 
     handleCommand(command);
 }
-SerializedMsg Simulator::handleSerializedSimulatorCommand(SerializedMsg msg) {
+
+SerializedMsg Simulator::handleSerializedSimulatorCommand(const SerializedMsg& msg) {
     auto command = parseProto<sslsim::SimulatorCommand>(msg);
     return serializeProto(handleSimulatorCommand(command, true));
 }
@@ -1575,8 +1563,3 @@ SerializedMsg Simulator::getSerializedTrueStateTrackedFrame() {
     SerializedMsg serialized_packet = serializeProto(getTrueStateTrackedFrame());
     return serialized_packet;
 }
-
-//SerializedMsg Simulator::getSerializedTrueStateSslWrapperPacket() {
-//    SerializedMsg serialized_packet = serializeProto(getTrueStateTrackedFrame());
-//    return serialized_packet;
-//}

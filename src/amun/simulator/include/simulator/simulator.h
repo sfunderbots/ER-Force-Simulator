@@ -75,7 +75,7 @@ class camun::simulator::Simulator : public QObject
 public:
     typedef QMap<unsigned int, QPair<SimRobot*, unsigned int>> RobotMap; /*First int: ID, Second int: Generation*/
 
-    explicit Simulator(std::string geometry_config_absolute_filepath, std::string realism_config_absolute_filepath);
+    explicit Simulator(std::string geometry_config_absolute_filepath, const std::string& realism_config_absolute_filepath);
     explicit Simulator(const Timer *timer, const amun::SimulatorSetup &setup, bool useManualTrigger = false);
     ~Simulator() override;
     Simulator(const Simulator&) = delete;
@@ -107,8 +107,8 @@ public:
     sslsim::RobotControlResponse handleYellowRobotControl(sslsim::RobotControl msg);
     sslsim::RobotControlResponse handleBlueRobotControl(sslsim::RobotControl msg);
     void handleCommandWrapper(const Command& command);
-    sslsim::SimulatorResponse handleSimulatorCommand(sslsim::SimulatorCommand command, bool is_blue);
-    std::vector<SSL_WrapperPacket> getSslWrapperPackets(bool add_noise=true);
+    sslsim::SimulatorResponse handleSimulatorCommand(const sslsim::SimulatorCommand& command, bool is_blue);
+    std::vector<SSL_WrapperPacket> getSslWrapperPackets();
     // Sometimes the simulation has to run before errors are detected, so provide
     // a separate function the caller can check whenever they want
     // Returns std::vector<sslsim::SimulatorError>
@@ -119,7 +119,7 @@ public:
     // for pybind to disambiguate types with different names
     SerializedMsg handleSerializedYellowRobotControl(SerializedMsg msg);
     SerializedMsg handleSerializedBlueRobotControl(SerializedMsg msg);
-    SerializedMsg handleSerializedSimulatorCommand(SerializedMsg msg);
+    SerializedMsg handleSerializedSimulatorCommand(const SerializedMsg& msg);
     std::vector<SerializedMsg> getSerializedSSLWrapperPackets();
     std::vector<SerializedMsg> getAndClearSerializedErrors();
     SerializedMsg getSerializedTrueStateTrackedFrame();
