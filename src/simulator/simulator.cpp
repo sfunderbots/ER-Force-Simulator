@@ -671,8 +671,12 @@ int main(int argc, char* argv[])
 
     QCommandLineOption geometryConfig({"g", "geometry"}, "The geometry file to load as default", "file", "2020");
     QCommandLineOption realismConfig("realism", "Simulator realism configuration (short file name without the .txt)", "realism", "Realistic");
+    QCommandLineOption yellowRobotSpecsConfig("yspec", "Yellow Team Robot Specs (short file name without the .txt)", "yellow robot specs", "default");
+    QCommandLineOption blueRobotSpecsConfig("bspec", "Blue Team Robot Specs (short file name without the .txt)", "yellow robot specs", "default");
     parser.addOption(geometryConfig);
     parser.addOption(realismConfig);
+    parser.addOption(yellowRobotSpecsConfig);
+    parser.addOption(blueRobotSpecsConfig);
 
 
     parser.process(app);
@@ -717,17 +721,56 @@ int main(int argc, char* argv[])
     Command c{new amun::Command};
 
     // start with default robots, take ER-Force specs.
-    robot::Specs ERForce;
-    robotSetDefault(&ERForce);
+    robot::Specs yellow_specs;
+    robotSetDefault(&yellow_specs);
+    robot::Specs blue_specs;
+    robotSetDefault(&blue_specs);
 
+    sslsim::RobotLimits yellow_limits;
+    if (!loadConfiguration("robot-specs/" + parser.value(yellowRobotSpecsConfig), &yellow_limits, false)) {
+        exit(EXIT_FAILURE);
+    }
+    sslsim::RobotLimits blue_limits;
+    if (!loadConfiguration("robot-specs/" + parser.value(blueRobotSpecsConfig), &blue_limits, false)) {
+        exit(EXIT_FAILURE);
+    }
+
+    {
+        auto* acc = yellow_specs.mutable_strategy();
+        acc->set_a_speedup_f_max(yellow_limits.acc_speedup_absolute_max());
+        acc->set_a_speedup_s_max(yellow_limits.acc_speedup_absolute_max());
+        acc->set_a_speedup_phi_max(yellow_limits.acc_speedup_angular_max());
+        acc->set_a_brake_f_max(yellow_limits.acc_brake_absolute_max());
+        acc->set_a_brake_s_max(yellow_limits.acc_brake_absolute_max());
+        acc->set_a_brake_phi_max(yellow_limits.acc_brake_angular_max());
+        yellow_specs.set_v_max(yellow_limits.vel_absolute_max());
+        yellow_specs.set_omega_max(yellow_limits.vel_angular_max());
+    }
+
+    {
+        auto* acc = blue_specs.mutable_strategy();
+        acc->set_a_speedup_f_max(blue_limits.acc_speedup_absolute_max());
+        acc->set_a_speedup_s_max(blue_limits.acc_speedup_absolute_max());
+        acc->set_a_speedup_phi_max(blue_limits.acc_speedup_angular_max());
+        acc->set_a_brake_f_max(blue_limits.acc_brake_absolute_max());
+        acc->set_a_brake_s_max(blue_limits.acc_brake_absolute_max());
+        acc->set_a_brake_phi_max(blue_limits.acc_brake_angular_max());
+        blue_specs.set_v_max(blue_limits.vel_absolute_max());
+        blue_specs.set_omega_max(blue_limits.vel_angular_max());
+    }
+
+    // This will set the teamSpecs in the simulator. So if we just change it here we should be ok
     auto* teamBlue = c->mutable_set_team_blue();
+    for(int i=0; i < 11; ++i){
+        auto* robot = teamBlue->add_robot();
+        robot->CopyFrom(blue_specs);
+        robot->set_id(i);
+    }
     auto* teamYellow = c->mutable_set_team_yellow();
-    for(auto* team : {teamBlue, teamYellow}) {
-        for(int i=0; i < 11; ++i){
-            auto* robot = team->add_robot();
-            robot->CopyFrom(ERForce);
-            robot->set_id(i);
-        }
+    for(int i=0; i < 11; ++i){
+        auto* robot = teamYellow->add_robot();
+        robot->CopyFrom(yellow_specs);
+        robot->set_id(i);
     }
 
     if (!loadConfiguration("simulator/" + parser.value(geometryConfig), c->mutable_simulator()->mutable_simulator_setup(), false)) {
