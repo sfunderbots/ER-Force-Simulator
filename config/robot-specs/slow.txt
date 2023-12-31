@@ -1,0 +1,8 @@
+# Pretty much the default values set in `robotSetDefault`
+acc_speedup_absolute_max: 2.0
+acc_brake_absolute_max: 2.0
+acc_speedup_angular_max: 30.0
+acc_brake_angular_max: 30.0
+# These don't actually do anything
+vel_absolute_max: 2.0
+vel_angular_max: 6.0
