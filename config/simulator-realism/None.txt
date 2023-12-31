@@ -2,7 +2,7 @@ stddev_ball_p: 0
 stddev_robot_p: 0
 stddev_robot_phi: 0
 stddev_ball_area: 0
-enable_invisible_ball: true
+enable_invisible_ball: false
 ball_visibility_threshold: 0.4
 camera_overlap: 0.3
 dribbler_ball_detections: 0
