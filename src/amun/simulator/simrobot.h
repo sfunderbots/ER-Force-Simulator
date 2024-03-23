@@ -22,6 +22,7 @@
 #define SIMROBOT_H
 
 #include "protobuf/robot.pb.h"
+#include "protobuf/ssl_vision_detection_tracked.pb.h"
 #include "protobuf/sslsim.h"
 #include <QList>
 #include <Eigen/Dense>
@@ -58,6 +59,7 @@ public:
     robot::RadioResponse setCommand(const sslsim::RobotCommand &command, SimBall *ball, bool charge, float rxLoss, float txLoss);
     void update(SSL_DetectionRobot *robot, float stddev_p, float stddev_phi, qint64 time, btVector3 positionOffset);
     void update(world::SimRobot *robot, SimBall *ball) const;
+    void updateTrackedState(gameController::TrackedRobot* robot) const;
     void restoreState(const world::SimRobot &robot);
     void move(const sslsim::TeleportRobot &robot);
     bool isFlipped();

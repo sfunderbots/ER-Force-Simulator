@@ -400,7 +400,7 @@ static btVector3 positionOffsetForCamera(float offsetStrength, btVector3 cameraP
     return btVector3(cameraPos.x(), cameraPos.y(), 0).normalized() * offsetStrength;
 }
 
-std::tuple<QList<QByteArray>, QByteArray, qint64> Simulator::createVisionPacket()
+std::tuple<QList<QByteArray>, QByteArray, qint64, QByteArray> Simulator::createVisionPacket()
 {
     const std::size_t numCameras = m_data->reportedCameraSetup.size();
     world::SimulatorState simState;
@@ -541,12 +541,20 @@ std::tuple<QList<QByteArray>, QByteArray, qint64> Simulator::createVisionPacket(
         }
     }
 
+    // serialize "tracker wrapper"
+    gameController::TrackerWrapperPacket tracker_wrapper = getTrackerWrapperPacket();
+    QByteArray tracked_data;
+    tracked_data.resize(tracker_wrapper.ByteSize());
+    if (!tracker_wrapper.SerializeToArray(tracked_data.data(), tracked_data.size())) {
+        tracked_data = {};
+    }
+
     QByteArray d;
     d.resize(simState.ByteSize());
     if (!simState.SerializeToArray(d.data(), d.size())) {
         d = {};
     }
-    return {data,d, 0};
+    return {data,d, 0, tracked_data};
 }
 
 void Simulator::sendVisionPacket()
@@ -557,6 +565,9 @@ void Simulator::sendVisionPacket()
         // the receive time may be a bit jittered just like a real transmission
 
     }
+    auto tracked_frame = std::get<3>(currentVisionPackets);
+    // TODO: should this be m_time?
+    emit gotTrackedFrame(tracked_frame, m_timer->currentTime(), "simulator"); // send "vision packet" and assume instant receiving
     emit sendRealData(std::get<1>(currentVisionPackets));
     if (!m_isPartial) {
         QTimer *timer = m_visionTimers.dequeue();
@@ -962,4 +973,34 @@ void Simulator::safelyTeleportBall(const float x, const float y)
             }
         }
     }
+}
+
+gameController::TrackerWrapperPacket Simulator::getTrackerWrapperPacket() {
+    gameController::TrackedFrame frame;
+
+    frame.set_frame_number(0); // Dummy value
+    frame.set_timestamp(static_cast<double>(m_time) * 1E-9);
+
+    gameController::TrackedBall ball;
+    m_data->ball->writeTrackedBallState(&ball);
+    *frame.add_balls() = ball;
+
+    auto getRobotStates = [&frame](const Simulator::RobotMap& robots, bool is_blue) {
+        for(const auto& it : robots) {
+            gameController::TrackedRobot robot;
+            it.first->updateTrackedState(&robot);
+            robot.mutable_robot_id()->set_team(is_blue ? gameController::Team::BLUE : gameController::Team::YELLOW);
+            *frame.add_robots() = robot;
+        }
+    };
+
+    getRobotStates(m_data->robotsBlue, true);
+    getRobotStates(m_data->robotsYellow, false);
+
+    gameController::TrackerWrapperPacket wrapper;
+    wrapper.set_uuid("er-force-sim-vision-tracker");
+    wrapper.set_source_name("er-force-sim-vision-tracker");
+    *wrapper.mutable_tracked_frame() = frame;
+
+    return wrapper;
 }

@@ -327,6 +327,32 @@ void SimBall::writeBallState(world::SimBall *ball) const
     ball->set_angular_z(angularVelocity.z());
 }
 
+void SimBall::writeTrackedBallState(gameController::TrackedBall *ball) const {
+    // Copied from writeBallState()
+
+    // The coordinate system internal to the simulator is rotated 90-degrees from the SSL
+    // coordinate system (ie. positive x in SSL is positive Y in sim, and positive Y in SSL
+    // is negative X in sim), so we transform to SSL coordinates here.
+    // Normally the "camera" logic handles this but we're skipping it here.
+    const btVector3 ballPosition = m_body->getWorldTransform().getOrigin() / SIMULATOR_SCALE;
+    ball->mutable_pos()->set_x(ballPosition.getY());
+    ball->mutable_pos()->set_y(-ballPosition.getX());
+    ball->mutable_pos()->set_z(ballPosition.getZ());
+    const btVector3 ballSpeed = speed() / SIMULATOR_SCALE;
+    ball->mutable_vel()->set_x(ballSpeed.getY());
+    ball->mutable_vel()->set_y(-ballSpeed.getX());
+    ball->mutable_vel()->set_z(ballSpeed.getZ());
+
+    //// Copied from update() function
+    //btTransform transform;
+    //m_motionState->getWorldTransform(transform);
+    //const btVector3 simulatorCameraPosition = btVector3(cameraPosition.x(), cameraPosition.y(), cameraPosition.z()) * SIMULATOR_SCALE;
+    //// visibility is the fraction of pixels of the ball visible from the camera,
+    //// in the range [0.0, 1.0]
+    //float visibility = positionOfVisiblePixels(ballPosition, transform.getOrigin(), simulatorCameraPosition, m_world);
+        //ball->set_visibility(visibility);
+}
+
 void SimBall::restoreState(const world::SimBall &ball)
 {
     btVector3 position(ball.p_x(), ball.p_y(), ball.p_z());

@@ -92,6 +92,20 @@ private:
     RoboCupSSLServer m_server;
 };
 
+class SSLVisionTrackerServer: public QObject {
+    Q_OBJECT
+public:
+    SSLVisionTrackerServer(const string& net_address, int port): m_server(this, port, net_address) {}
+
+public slots:
+    void sendVisionTrackerData(const QByteArray& data, qint64 time, QString sender) {
+        m_server.send(data);
+    }
+
+private:
+    RoboCupSSLServer m_server;
+};
+
 class SimulatorCommandAdaptor: public QObject {
     Q_OBJECT
 public:
@@ -592,6 +606,7 @@ signals:
     void sendSSLSimError(const QList<SSLSimError>& errors, ErrorSource source); // out
     void sendRadioResponses(const QList<robot::RadioResponse> &responses); // out
     void gotPacket(const QByteArray &data, qint64 time, QString sender); // out
+    void gotTrackedFrame(const QByteArray &data, qint64 time, QString sender); // out
     void gotCommand(const Command &command); // internal
     void handleRadioCommands(const SSLSimRobotControl& control, bool isBlue, qint64 processingStart); // in
 public slots:
@@ -634,6 +649,7 @@ void SimProxy::handleCommand(const Command &command) {
         m_sim = new Simulator(m_timer, command->simulator().simulator_setup());
         connect(this, &SimProxy::gotCommand, m_sim, &Simulator::handleCommand);
         connect(m_sim, &Simulator::gotPacket, this, &SimProxy::gotPacket);
+        connect(m_sim, &Simulator::gotTrackedFrame, this, &SimProxy::gotTrackedFrame);
         connect(this, &SimProxy::handleRadioCommands, m_sim, &Simulator::handleRadioCommands);
         connect(m_sim, &Simulator::sendSSLSimError, this, &SimProxy::sendSSLSimError);
         connect(m_sim, &Simulator::sendRadioResponses, this, &SimProxy::sendRadioResponses);
@@ -677,9 +693,11 @@ int main(int argc, char* argv[])
     parser.addOption(realismConfig);
     parser.addOption(localhostConfig);
     QCommandLineOption yellowRobotSpecsConfig("yspec", "Yellow Team Robot Specs (short file name without the .txt)", "yellow robot specs", "default");
-    QCommandLineOption blueRobotSpecsConfig("bspec", "Blue Team Robot Specs (short file name without the .txt)", "yellow robot specs", "default");
+    QCommandLineOption blueRobotSpecsConfig("bspec", "Blue Team Robot Specs (short file name without the .txt)", "blue robot specs", "default");
+    QCommandLineOption enableVisionTrackerOption({"t", "enable-vision-tracker"}, "Enable the ssl vision tracker. This publishes a TrackedWrapperPacket using the true world state internal to the simulator");
     parser.addOption(yellowRobotSpecsConfig);
     parser.addOption(blueRobotSpecsConfig);
+    parser.addOption(enableVisionTrackerOption);
 
     parser.process(app);
 
@@ -704,6 +722,8 @@ int main(int argc, char* argv[])
     RobotCommandAdaptor blue{true, &timer}, yellow{false, &timer};
     SimProxy sim{&timer};
     SSLVisionServer vision{SSL_SIMULATED_VISION_PORT, parser.isSet(localhostConfig) ? SSL_VISION_ADDRESS_LOCALHOST : SSL_VISION_ADDRESS};
+    // TODO: put behind a flag
+    SSLVisionTrackerServer tracker{SSL_VISION_TRACKER_ADDRESS, SSL_VISION_TRACKER_PORT};
     SimulatorCommandAdaptor commands{&timer, &vision};
 
     blue.connect(&blue, &RobotCommandAdaptor::sendRadioCommands, &sim, &SimProxy::handleRadioCommands);
@@ -713,6 +733,9 @@ int main(int argc, char* argv[])
 
 
     vision.connect(&sim, &SimProxy::gotPacket, &vision, &SSLVisionServer::sendVisionData);
+    if(parser.isSet(enableVisionTrackerOption)) {
+        tracker.connect(&sim, &SimProxy::gotTrackedFrame, &tracker, &SSLVisionTrackerServer::sendVisionTrackerData);
+    }
     commands.connect(&commands, &SimulatorCommandAdaptor::sendCommand, &sim, &SimProxy::handleCommand);
 
 
