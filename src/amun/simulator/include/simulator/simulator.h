@@ -24,6 +24,8 @@
 #include "protobuf/command.h"
 #include "protobuf/status.h"
 #include "protobuf/sslsim.h"
+#include "protobuf/ssl_vision_detection_tracked.pb.h"
+#include "protobuf/ssl_vision_wrapper_tracked.pb.h"
 #include <QList>
 #include <QMap>
 #include <QPair>
@@ -74,6 +76,7 @@ public:
 
 signals:
     void gotPacket(const QByteArray &data, qint64 time, QString sender);
+    void gotTrackedFrame(const QByteArray &data, qint64 time, QString sender);
     void sendStatus(const Status &status);
     void sendRadioResponses(const QList<robot::RadioResponse> &responses);
     void sendRealData(const QByteArray& data); // sends amun::SimulatorState
@@ -95,7 +98,7 @@ private slots:
 private:
     void sendSSLSimErrorInternal(ErrorSource source);
     void resetFlipped(RobotMap &robots, float side);
-    std::tuple<QList<QByteArray>, QByteArray, qint64> createVisionPacket();
+    std::tuple<QList<QByteArray>, QByteArray, qint64, QByteArray> createVisionPacket();
     void resetVisionPackets();
     void setTeam(RobotMap &list, float side, const robot::Team &team, QMap<uint32_t, robot::Specs>& specs);
     void moveBall(const sslsim::TeleportBall &ball);
@@ -104,10 +107,25 @@ private:
     void initializeDetection(SSL_DetectionFrame *detection, std::size_t cameraId);
 
 private:
+    template <typename T>
+    std::vector<uint8_t> serializeProto(const T& msg) {
+        size_t msg_size_bytes = msg.ByteSizeLong();
+        std::vector<uint8_t> data(msg_size_bytes);
+        if(data.data() != nullptr) {
+            msg.SerializeToArray(data.data(), msg_size_bytes);
+        }
+        return data;
+    }
+
+    gameController::TrackerWrapperPacket getTrackerWrapperPacket();
+
+private:
     typedef std::tuple<SSLSimRobotControl, qint64, bool> RadioCommand;
     SimulatorData *m_data;
     QQueue<RadioCommand> m_radioCommands;
-    QQueue<std::tuple<QList<QByteArray>, QByteArray, qint64>> m_visionPackets;
+    // The 4th element in the tuple is a serialize TrackedFrame containing
+    // the 'true' state of the world
+    QQueue<std::tuple<QList<QByteArray>, QByteArray, qint64, QByteArray>> m_visionPackets;
     QQueue<QTimer *> m_visionTimers;
     bool m_isPartial;
     const Timer *m_timer;
