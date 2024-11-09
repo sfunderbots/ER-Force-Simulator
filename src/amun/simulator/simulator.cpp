@@ -979,7 +979,7 @@ gameController::TrackerWrapperPacket Simulator::getTrackerWrapperPacket() {
     gameController::TrackedFrame frame;
 
     frame.set_frame_number(0); // Dummy value
-    frame.set_timestamp(static_cast<double>(m_time) * 1E-9);
+    frame.set_timestamp((m_time + m_visionDelay - m_visionProcessingTime)*1E-9);
 
     gameController::TrackedBall ball;
     m_data->ball->writeTrackedBallState(&ball);
