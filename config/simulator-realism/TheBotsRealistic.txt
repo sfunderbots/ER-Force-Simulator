@@ -1,0 +1,25 @@
+# This is a copy of the Realistic config, with some minor modifications
+stddev_ball_p: 0.0014
+stddev_robot_p: 0.0013
+stddev_robot_phi: 0.01
+stddev_ball_area: 6.5
+enable_invisible_ball: true
+ball_visibility_threshold: 0.4
+camera_overlap: 1
+dribbler_ball_detections: 0.05
+# Normally there is a small camera position error around 10cm.
+# We ignore it since it's small and generally shouldn't affect
+# the accuracy of our testing, but removes a source of randomness
+# that affects the data we generate for offline tests
+# (such as the ball tracker)
+camera_position_error: 0.0
+robot_command_loss: 0.03
+robot_response_loss: 0.1
+missing_ball_detections: 0.05
+vision_delay: 35000000
+vision_processing_time: 10000000
+simulate_dribbling: true
+# Disable object_position_offset since the tracker's may not deal
+# with it yet. Eventually this should be re-enabled
+object_position_offset: 0.0
+missing_robot_detections: 0.02
