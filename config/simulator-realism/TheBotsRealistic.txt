@@ -6,7 +6,8 @@ stddev_ball_area: 6.5
 enable_invisible_ball: true
 ball_visibility_threshold: 0.4
 camera_overlap: 1
-dribbler_ball_detections: 0.05
+# Slighly higher than RC2021 to make sure we're robust
+dribbler_ball_detections: 0.03
 # Normally there is a small camera position error around 10cm.
 # We ignore it since it's small and generally shouldn't affect
 # the accuracy of our testing, but removes a source of randomness
