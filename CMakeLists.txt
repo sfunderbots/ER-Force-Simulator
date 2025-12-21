@@ -136,7 +136,11 @@ endif()
 
 # Try to auto-locate Qt5 on MacOS (won't work with custom installs)
 if (APPLE)
-    if (EXISTS /usr/local/opt/qt@5)
+    if (EXISTS /opt/homebrew/opt/qt@5)
+        # Apple Silicon (M1/M2/M3) Homebrew path
+        set(Qt5_DIR "/opt/homebrew/opt/qt@5/lib/cmake/Qt5")
+    elseif (EXISTS /usr/local/opt/qt@5)
+        # Intel Mac Homebrew path
         set(Qt5_DIR "/usr/local/opt/qt@5/lib/cmake/Qt5")
     elseif(EXISTS /usr/local/opt/qt5)
         set(Qt5_DIR "/usr/local/opt/qt5/lib/cmake/Qt5")
