@@ -723,7 +723,7 @@ int main(int argc, char* argv[])
     SimProxy sim{&timer};
     SSLVisionServer vision{SSL_SIMULATED_VISION_PORT, parser.isSet(localhostConfig) ? SSL_VISION_ADDRESS_LOCALHOST : SSL_VISION_ADDRESS};
     // TODO: put behind a flag
-    SSLVisionTrackerServer tracker{SSL_VISION_TRACKER_ADDRESS, SSL_VISION_TRACKER_PORT};
+    SSLVisionTrackerServer tracker{parser.isSet(localhostConfig) ? SSL_VISION_TRACKER_ADDRESS_LOCALHOST : SSL_VISION_TRACKER_ADDRESS , SSL_VISION_TRACKER_PORT};
     SimulatorCommandAdaptor commands{&timer, &vision};
 
     blue.connect(&blue, &RobotCommandAdaptor::sendRadioCommands, &sim, &SimProxy::handleRadioCommands);
