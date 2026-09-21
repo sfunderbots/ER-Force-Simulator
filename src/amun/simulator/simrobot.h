@@ -25,6 +25,7 @@
 #include "protobuf/ssl_vision_detection_tracked.pb.h"
 #include "protobuf/sslsim.h"
 #include <QList>
+#include <array>
 #include <Eigen/Dense>
 #include <Eigen/QR>
 #include <btBulletDynamicsCommon.h>
@@ -81,6 +82,7 @@ private:
     bool handleMoveCommand();
     void reportAccelerationLimits() const;
     void generateVelocityCoupling();
+    void applyWheelForces(float time);
 
     RNG *m_rng;
     robot::Specs m_specs;
@@ -116,6 +118,8 @@ private:
     bool m_perfectDribbler = false;
 
     qint64 m_lastSendTime = 0;
+
+    std::array<Wheel, 4> m_wheels{};
 
     Eigen::Matrix<float, 4, 3> m_velocityCoupling;
     Eigen::CompleteOrthogonalDecomposition<Eigen::Matrix<float, 4, 3>> m_inverseCoupling;
