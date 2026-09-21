@@ -26,12 +26,31 @@
 #include "simball.h"
 #include "simrobot.h"
 #include "simulator.h"
+#include <algorithm>
 #include <cmath>
 #include <QDebug>
 
 using namespace camun::simulator;
 
 const float MAX_SPEED = 1000;
+
+namespace {
+
+constexpr float WHEEL_RADIUS = 0.029915f;
+constexpr float ROLLER_RADIUS = 0.007188f;
+constexpr float ROLLER_CIRCLE_RADIUS = WHEEL_RADIUS - ROLLER_RADIUS;
+
+constexpr int N_ROLLERS = 16;
+constexpr float ROLLER_PITCH = 2.0f * M_PI / N_ROLLERS;
+
+constexpr float MU_ROLLING = 0.10f;
+constexpr float MU_ROLLER = 0.10f;
+constexpr float SMOOTHING_VELOCITY = 0.03f;
+
+constexpr float GRAVITY = 9.81f;
+constexpr float KINEMATIC_WHEEL_RADIUS = 0.0225f;
+
+} // namespace
 
 float boundSpeed(float speed)
 {
@@ -399,6 +418,8 @@ void SimRobot::begin(SimBall *ball, double time)
         m_shootTime = 0.0;
     }
 
+    applyWheelForces(time);
+
     if (m_inStandby || !m_sslCommand.has_move_command()) {
         return;
     }
@@ -506,6 +527,102 @@ void SimRobot::generateVelocityCoupling()
     m_velocityCoupling.row(3) = Eigen::Vector3f{X_FRONT, -Y_FRONT, -PHI};
 
     m_inverseCoupling = m_velocityCoupling.completeOrthogonalDecomposition();
+
+    for (std::size_t i = 0; i < m_wheels.size(); ++i) {
+        const float dx = m_velocityCoupling(i, 0);
+        const float dy = m_velocityCoupling(i, 1);
+        const float norm = std::hypot(dx, dy);
+
+        m_wheels[i].dir = btVector3(dx / norm, dy / norm, 0.0f);
+
+        const float radialDistance =
+            -m_velocityCoupling(i, 2) * 2.0f * M_PI * KINEMATIC_WHEEL_RADIUS;
+
+        m_wheels[i].pos = btVector3(
+            -m_wheels[i].dir.y() * radialDistance,
+             m_wheels[i].dir.x() * radialDistance,
+             0.0f
+        );
+
+        m_wheels[i].angle = 0.0f;
+    }
+}
+
+void SimRobot::applyWheelForces(float time)
+{
+    if (time <= 0.0f) {
+        return;
+    }
+
+    const float normalForce = m_specs.mass() * GRAVITY / static_cast<float>(m_wheels.size());
+
+    const btTransform transform = m_body->getWorldTransform();
+    const btMatrix3x3 basis = transform.getBasis();
+    const btMatrix3x3 inverseBasis = basis.transpose();
+
+    const btVector3 linearVelocityWorld = m_body->getLinearVelocity() / SIMULATOR_SCALE;
+    const btVector3 linearVelocityLocal = inverseBasis * linearVelocityWorld;
+    const float robotOmega = m_body->getAngularVelocity().z();
+
+    btVector3 totalForceLocal(0.0f, 0.0f, 0.0f);
+    float totalTorqueLocal = 0.0f;
+
+    for (Wheel &wheel : m_wheels) {
+        const btVector3 wheelVelocityLocal =
+            linearVelocityLocal
+            + robotOmega * btVector3(-wheel.pos.y(), wheel.pos.x(), 0.0f);
+
+        const float vDrive = wheelVelocityLocal.dot(wheel.dir);
+
+        const float wheelOmega = vDrive / WHEEL_RADIUS;
+        wheel.angle += wheelOmega * time;
+
+        const float phi = std::remainder(wheel.angle, ROLLER_PITCH);
+        const float sinPhi = std::sin(phi);
+
+        const float radialTerm =
+            ROLLER_RADIUS * ROLLER_RADIUS
+            - ROLLER_CIRCLE_RADIUS * ROLLER_CIRCLE_RADIUS * sinPhi * sinPhi;
+
+        const float effectiveRadius =
+            ROLLER_CIRCLE_RADIUS * std::cos(phi)
+            + std::sqrt(std::max(0.0f, radialTerm));
+
+        const float drivenSurfaceVelocity = wheelOmega * effectiveRadius;
+        const float longitudinalSlip = vDrive - drivenSurfaceVelocity;
+
+        const btVector3 lateralDir(wheel.dir.y(), -wheel.dir.x(), 0.0f);
+        const float lateralVelocity = wheelVelocityLocal.dot(lateralDir);
+
+        const float longitudinalForce =
+            -MU_ROLLING * normalForce
+            * longitudinalSlip
+            / std::sqrt(longitudinalSlip * longitudinalSlip + SMOOTHING_VELOCITY * SMOOTHING_VELOCITY);
+
+        const float lateralForce =
+            -MU_ROLLER * normalForce
+            * lateralVelocity
+            / std::sqrt(lateralVelocity * lateralVelocity + SMOOTHING_VELOCITY * SMOOTHING_VELOCITY);
+
+        const btVector3 forceLocal =
+            longitudinalForce * wheel.dir
+            + lateralForce * lateralDir;
+
+        totalForceLocal += forceLocal;
+        totalTorqueLocal +=
+            wheel.pos.x() * forceLocal.y()
+            - wheel.pos.y() * forceLocal.x();
+    }
+
+    if (totalForceLocal.length2() == 0.0f && totalTorqueLocal == 0.0f) {
+        return;
+    }
+
+    m_body->activate();
+    m_body->applyCentralForce(basis * (totalForceLocal * SIMULATOR_SCALE));
+    m_body->applyTorque(
+        basis * btVector3(0.0f, 0.0f, totalTorqueLocal * SIMULATOR_SCALE * SIMULATOR_SCALE)
+    );
 }
 
 Eigen::Vector3f SimRobot::limitAcceleration(float a_f, float a_s, float a_phi, float v_f, float v_s, float omega) const
