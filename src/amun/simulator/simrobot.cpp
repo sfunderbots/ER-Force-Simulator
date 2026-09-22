@@ -46,6 +46,7 @@ constexpr float ROLLER_PITCH = 2.0f * M_PI / N_ROLLERS;
 constexpr float MU_ROLLING = 0.10f;
 constexpr float MU_ROLLER = 0.10f;
 constexpr float SMOOTHING_VELOCITY = 0.03f;
+constexpr float ROLLER_INERTIA = 1.0e-7f; // kg m^2, temporary
 
 constexpr float GRAVITY = 9.81f;
 constexpr float KINEMATIC_WHEEL_RADIUS = 0.0225f;
@@ -367,7 +368,7 @@ void SimRobot::begin(SimBall *ball, double time)
         return;
     }
 
-    m_body->setDamping(0.7, 0.8);
+    m_body->setDamping(0.0, 0.0);
 
     btTransform t = m_body->getWorldTransform();
     t.setOrigin(btVector3(0,0,0));
@@ -545,6 +546,7 @@ void SimRobot::generateVelocityCoupling()
         );
 
         m_wheels[i].angle = 0.0f;
+        m_wheels[i].rollerOmega.fill(0.0f);
     }
 }
 
@@ -554,14 +556,17 @@ void SimRobot::applyWheelForces(float time)
         return;
     }
 
-    const float normalForce = m_specs.mass() * GRAVITY / static_cast<float>(m_wheels.size());
+    const float normalForce =
+        m_specs.mass() * GRAVITY / static_cast<float>(m_wheels.size());
 
     const btTransform transform = m_body->getWorldTransform();
     const btMatrix3x3 basis = transform.getBasis();
     const btMatrix3x3 inverseBasis = basis.transpose();
 
-    const btVector3 linearVelocityWorld = m_body->getLinearVelocity() / SIMULATOR_SCALE;
-    const btVector3 linearVelocityLocal = inverseBasis * linearVelocityWorld;
+    const btVector3 linearVelocityWorld =
+        m_body->getLinearVelocity() / SIMULATOR_SCALE;
+    const btVector3 linearVelocityLocal =
+        inverseBasis * linearVelocityWorld;
     const float robotOmega = m_body->getAngularVelocity().z();
 
     btVector3 totalForceLocal(0.0f, 0.0f, 0.0f);
@@ -577,51 +582,105 @@ void SimRobot::applyWheelForces(float time)
         const float wheelOmega = vDrive / WHEEL_RADIUS;
         wheel.angle += wheelOmega * time;
 
+        int rollerIndex = static_cast<int>(
+            std::floor(
+                (wheel.angle + 0.5f * ROLLER_PITCH) / ROLLER_PITCH
+            )
+        );
+
+        rollerIndex %= N_ROLLERS;
+        if (rollerIndex < 0) {
+            rollerIndex += N_ROLLERS;
+        }
+
         const float phi = std::remainder(wheel.angle, ROLLER_PITCH);
         const float sinPhi = std::sin(phi);
 
         const float radialTerm =
             ROLLER_RADIUS * ROLLER_RADIUS
-            - ROLLER_CIRCLE_RADIUS * ROLLER_CIRCLE_RADIUS * sinPhi * sinPhi;
+            - ROLLER_CIRCLE_RADIUS * ROLLER_CIRCLE_RADIUS
+              * sinPhi * sinPhi;
 
         const float effectiveRadius =
             ROLLER_CIRCLE_RADIUS * std::cos(phi)
             + std::sqrt(std::max(0.0f, radialTerm));
 
-        const float drivenSurfaceVelocity = wheelOmega * effectiveRadius;
-        const float longitudinalSlip = vDrive - drivenSurfaceVelocity;
+        const float drivenSurfaceVelocity =
+            wheelOmega * effectiveRadius;
 
-        const btVector3 lateralDir(wheel.dir.y(), -wheel.dir.x(), 0.0f);
-        const float lateralVelocity = wheelVelocityLocal.dot(lateralDir);
+        const float longitudinalSlip =
+            vDrive - drivenSurfaceVelocity;
+
+        const btVector3 lateralDir(
+            wheel.dir.y(),
+            -wheel.dir.x(),
+            0.0f
+        );
+
+        const float lateralVelocity =
+            wheelVelocityLocal.dot(lateralDir);
+
+        const float rollerSurfaceVelocity =
+            wheel.rollerOmega[rollerIndex] * ROLLER_RADIUS;
+
+        const float rollerSlip =
+            lateralVelocity - rollerSurfaceVelocity;
 
         const float longitudinalForce =
             -MU_ROLLING * normalForce
             * longitudinalSlip
-            / std::sqrt(longitudinalSlip * longitudinalSlip + SMOOTHING_VELOCITY * SMOOTHING_VELOCITY);
+            / std::sqrt(
+                longitudinalSlip * longitudinalSlip
+                + SMOOTHING_VELOCITY * SMOOTHING_VELOCITY
+            );
 
         const float lateralForce =
             -MU_ROLLER * normalForce
-            * lateralVelocity
-            / std::sqrt(lateralVelocity * lateralVelocity + SMOOTHING_VELOCITY * SMOOTHING_VELOCITY);
+            * rollerSlip
+            / std::sqrt(
+                rollerSlip * rollerSlip
+                + SMOOTHING_VELOCITY * SMOOTHING_VELOCITY
+            );
+
+        const float rollerTorque =
+            -lateralForce * ROLLER_RADIUS;
+
+        const float rollerAngularAcceleration =
+            rollerTorque / ROLLER_INERTIA;
+
+        wheel.rollerOmega[rollerIndex] +=
+            rollerAngularAcceleration * time;
 
         const btVector3 forceLocal =
             longitudinalForce * wheel.dir
             + lateralForce * lateralDir;
 
         totalForceLocal += forceLocal;
+
         totalTorqueLocal +=
             wheel.pos.x() * forceLocal.y()
             - wheel.pos.y() * forceLocal.x();
     }
 
-    if (totalForceLocal.length2() == 0.0f && totalTorqueLocal == 0.0f) {
+    if (totalForceLocal.length2() == 0.0f
+            && totalTorqueLocal == 0.0f) {
         return;
     }
 
     m_body->activate();
-    m_body->applyCentralForce(basis * (totalForceLocal * SIMULATOR_SCALE));
+
+    m_body->applyCentralForce(
+        basis * (totalForceLocal * SIMULATOR_SCALE)
+    );
+
     m_body->applyTorque(
-        basis * btVector3(0.0f, 0.0f, totalTorqueLocal * SIMULATOR_SCALE * SIMULATOR_SCALE)
+        basis * btVector3(
+            0.0f,
+            0.0f,
+            totalTorqueLocal
+                * SIMULATOR_SCALE
+                * SIMULATOR_SCALE
+        )
     );
 }
 
