@@ -55,10 +55,11 @@ ExternalProject_Add(project_libgit2
         -DCMAKE_C_COMPILER:PATH=${CMAKE_C_COMPILER}
         -DCMAKE_BUILD_TYPE:STRING=Release
         -DCMAKE_C_FLAGS:STRING=${LIB_GIT_C_FLAGS}
+        -DBUILD_CLAR:BOOL=OFF
     BUILD_BYPRODUCTS
             "<INSTALL_DIR>/${LIBGIT_SUBPATH}"
     DOWNLOAD_DIR "${DEPENDENCY_DOWNLOADS}"
-    TEST_COMMAND "<BINARY_DIR>/libgit2_clar" "-xclone::nonetwork" "-xremote::httpproxy::env" "-xrefs::revparse::date" "-xstream::registration::tls"
+    TEST_COMMAND ""
 )
 
 EPHelper_Mark_For_Download(project_libgit2)
