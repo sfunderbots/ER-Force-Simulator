@@ -101,6 +101,7 @@ private:
         float angle;
         btVector3 pos;
         btVector3 dir;
+        std::array<float, 16> rollerOmega{};
     };
 
     sslsim::TeleportRobot m_move;
