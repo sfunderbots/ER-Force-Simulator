@@ -36,15 +36,23 @@ const float MAX_SPEED = 1000;
 
 namespace {
 
-    // Geometry updates
-    constexpr float WHEEL_RADIUS = 0.029915f;           // 29.915 mm
-    constexpr float ROLLER_RADIUS = 0.007188f;          // 7.188 mm
-    constexpr float ROLLER_CIRCLE_RADIUS = 0.022727f;   // WHEEL_RADIUS - ROLLER_RADIUS
+    // Wheel/roller geometry.
+    // Williams et al. model the finite roller/gap geometry as an angular
+    // sector around the wheel. We use the physically counted 16 rollers.
     constexpr int N_ROLLERS = 16;
-    constexpr float ROLLER_PITCH = 0.392699f;           // 2 * M_PI / 16 (22.5 deg)
+    constexpr float ROLLER_PITCH = 2.0f * M_PI / static_cast<float>(N_ROLLERS);
+    constexpr float ROLLER_CONTACT_FRACTION = 0.90f;
 
-    // Friction updates
-    constexpr float MU_ROLLER = 0.05f;                  // Transverse roller friction (down from 0.10)
+    // Transverse friction reference values from Williams et al. (2002),
+    // measured on their carpet surface:
+    //   roller contact: 0.15
+    //   rigid material between rollers: 0.56
+    //
+    // These are literature reference values, NOT measurements of The Bots'
+    // wheel/field combination. They must eventually be replaced by our own
+    // measured coefficients.
+    constexpr float MU_ROLLER_TRANSVERSE = 0.15f;
+    constexpr float MU_RIGID_TRANSVERSE = 0.56f;
 
     constexpr float GRAVITY = 9.81f;
     constexpr float KINEMATIC_WHEEL_RADIUS = 0.0225f;
@@ -533,20 +541,6 @@ void SimRobot::generateVelocityCoupling()
         const float norm = std::hypot(dx, dy);
 
         m_wheels[i].dir = btVector3(dx / norm, dy / norm, 0.0f);
-
-        const float radialDistance =
-            -m_velocityCoupling(i, 2) * 2.0f * M_PI * KINEMATIC_WHEEL_RADIUS;
-
-        m_wheels[i].pos = btVector3(
-            -m_wheels[i].dir.y() * radialDistance,
-             m_wheels[i].dir.x() * radialDistance,
-             0.0f
-        );
-
-        m_wheels[i].angle = 0.0f;
-    }
-}
-
 void SimRobot::applyWheelForces(float time)
 {
     if (time <= 0.0f) {
@@ -566,59 +560,126 @@ void SimRobot::applyWheelForces(float time)
         inverseBasis * linearVelocityWorld;
     const float robotOmega = m_body->getAngularVelocity().z();
 
-    btVector3 totalForceLocal(0.0f, 0.0f, 0.0f);
-    float totalTorqueLocal = 0.0f;
+    std::array<btVector3, 4> transverseDirs{};
+    std::array<float, 4> vTransverse{};
+    std::array<float, 4> maxTransverseForce{};
 
-    for (Wheel &wheel : m_wheels) {
+    // Build the wheel transverse-direction Gram matrix. This lets the
+    // static-friction branch distribute the force across all four wheels
+    // instead of giving every wheel a full copy of the robot's stopping force.
+    float gramXX = 0.0f;
+    float gramXY = 0.0f;
+    float gramYY = 0.0f;
+
+    for (std::size_t i = 0; i < m_wheels.size(); ++i) {
+        Wheel &wheel = m_wheels[i];
+
         const btVector3 wheelVelocityLocal =
             linearVelocityLocal
             + robotOmega * btVector3(-wheel.pos.y(), wheel.pos.x(), 0.0f);
 
-        const btVector3 transverseDir(
+        transverseDirs[i] = btVector3(
             wheel.dir.y(),
             -wheel.dir.x(),
             0.0f
         );
 
-        const float vTransverse =
-            wheelVelocityLocal.dot(transverseDir);
+        vTransverse[i] =
+            wheelVelocityLocal.dot(transverseDirs[i]);
 
-        // Sixteen physical rollers are represented kinematically. The
-        // instantaneous roller phase determines the contact geometry.
-        // Roller inertia is deliberately not a separate state.
-        const float phi = std::remainder(wheel.angle, ROLLER_PITCH);
-        const float sinPhi = std::sin(phi);
+        // The current wheel phase selects which physical sector is touching
+        // the ground. Roller inertia is deliberately not introduced as a
+        // separate state.
+        const float phase =
+            std::remainder(wheel.angle, ROLLER_PITCH);
+        const bool rollerContact =
+            std::abs(phase)
+            <= 0.5f * ROLLER_CONTACT_FRACTION * ROLLER_PITCH;
 
-        const float radialTerm =
-            ROLLER_RADIUS * ROLLER_RADIUS
-            - ROLLER_CIRCLE_RADIUS * ROLLER_CIRCLE_RADIUS
-              * sinPhi * sinPhi;
+        const float muTransverse =
+            rollerContact
+                ? MU_ROLLER_TRANSVERSE
+                : MU_RIGID_TRANSVERSE;
 
-        const float effectiveRadius =
-            ROLLER_CIRCLE_RADIUS * std::cos(phi)
-            + std::sqrt(std::max(0.0f, radialTerm));
+        maxTransverseForce[i] = muTransverse * normalForce;
 
-        const float vDrive = wheelVelocityLocal.dot(wheel.dir);
+        gramXX += transverseDirs[i].x() * transverseDirs[i].x();
+        gramXY += transverseDirs[i].x() * transverseDirs[i].y();
+        gramYY += transverseDirs[i].y() * transverseDirs[i].y();
+
+        // With the wheel treated kinematically, its phase advances at the
+        // angular speed required for rolling in the driven direction.
+        const float wheelDriveSpeed =
+            wheelVelocityLocal.dot(wheel.dir);
         const float wheelOmega =
-            vDrive / std::max(effectiveRadius, 1.0e-6f);
+            wheelDriveSpeed / KINEMATIC_WHEEL_RADIUS;
         wheel.angle += wheelOmega * time;
+    }
 
-        // Pure Coulomb transverse friction. There is no tanh smoothing,
-        // fitted velocity regularization, or artificial roller damping.
-        // MU_ROLLER is an explicit measurable model parameter.
-        const float transverseForce =
-            (vTransverse == 0.0f)
-                ? 0.0f
-                : -MU_ROLLER * normalForce
-                    * std::copysign(1.0f, vTransverse);
+    const float gramDet = gramXX * gramYY - gramXY * gramXY;
+    if (std::abs(gramDet) < 1.0e-9f) {
+        return;
+    }
 
-        const btVector3 forceLocal =
-            transverseForce * transverseDir;
+    const float invGramXX = gramYY / gramDet;
+    const float invGramXY = -gramXY / gramDet;
+    const float invGramYY = gramXX / gramDet;
 
-        totalForceLocal += forceLocal;
-        totalTorqueLocal +=
-            wheel.pos.x() * forceLocal.y()
-            - wheel.pos.y() * forceLocal.x();
+    btVector3 totalForceLocal(0.0f, 0.0f, 0.0f);
+
+    for (std::size_t i = 0; i < m_wheels.size(); ++i) {
+        const btVector3 &transverseDir = transverseDirs[i];
+        const float slipSpeed = vTransverse[i];
+
+        // Static Coulomb friction is not a unique function of velocity at
+        // zero slip. It can take any value up to mu*N while maintaining
+        // no-slip contact. We therefore first calculate the static force
+        // required to remove the current transverse velocity in this
+        // timestep, and only saturate to kinetic Coulomb friction when that
+        // requirement exceeds the available friction.
+        //
+        // This is a discrete-time contact formulation of Coulomb friction,
+        // not a smoothing function.
+        const float correctedVX =
+            invGramXX * linearVelocityLocal.x()
+            + invGramXY * linearVelocityLocal.y();
+        const float correctedVY =
+            invGramXY * linearVelocityLocal.x()
+            + invGramYY * linearVelocityLocal.y();
+
+        const float staticForce =
+            -m_specs.mass() / time
+            * (transverseDir.x() * correctedVX
+               + transverseDir.y() * correctedVY);
+
+        float transverseForce;
+        if (std::abs(staticForce) <= maxTransverseForce[i]) {
+            // Static/sticking branch: any value inside the Coulomb limit is
+            // physically admissible, and this is the value required to hold
+            // the current no-slip state for the timestep.
+            transverseForce = staticForce;
+        } else {
+            // Kinetic Coulomb branch: once the static requirement exceeds
+            // the available friction, friction opposes the actual slip.
+            transverseForce =
+                (slipSpeed == 0.0f)
+                    ? 0.0f
+                    : -maxTransverseForce[i]
+                        * std::copysign(1.0f, slipSpeed);
+        }
+
+        totalForceLocal += transverseForce * transverseDir;
+    }
+
+    if (totalForceLocal.length2() == 0.0f) {
+        return;
+    }
+
+    m_body->activate();
+    m_body->applyCentralForce(
+        basis * (totalForceLocal * SIMULATOR_SCALE)
+    );
+}();
     }
 
     m_body->activate();
