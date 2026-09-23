@@ -96,12 +96,12 @@ private:
     std::unique_ptr<btPoint2PointConstraint> m_holdBallConstraint;
     std::unique_ptr<btGeneric6DofSpring2Constraint> m_notTipOverConstraint;
 
-    struct Wheel
-    {
+    struct Wheel {
         float angle;
         btVector3 pos;
         btVector3 dir;
-        std::array<float, 16> rollerOmega{};
+        std::array<float, 16> rollerOmega{}; // Tracks the spin rate of each of the 16 rollers
+        float motorOmega = 0.0f;             // The target speed driven by your controller/joystick
     };
 
     sslsim::TeleportRobot m_move;
