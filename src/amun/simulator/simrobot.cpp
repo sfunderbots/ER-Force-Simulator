@@ -600,6 +600,18 @@ void SimRobot::applyWheelForces(float time)
             rollerIndex += N_ROLLERS;
         }
 
+        // NEW: Decelerate all 15 rollers that are NOT currently in contact with the ground
+        for (int i = 0; i < N_ROLLERS; ++i) {
+            if (i == rollerIndex) continue;
+            float &om = wheel.rollerOmega[i];
+            const float decel = ROLLER_BEARING_DECEL * time;
+            if (om > 0.0f) {
+                om = std::max(0.0f, om - decel);
+            } else if (om < 0.0f) {
+                om = std::min(0.0f, om + decel);
+            }
+        }
+
         // Geometry of the current roller contact.
         const float phi = std::remainder(wheel.angle, ROLLER_PITCH);
         const float sinPhi = std::sin(phi);

@@ -265,7 +265,7 @@ void Simulator::process()
 
     // simulate to current strategy time
     double timeDelta = (current_time - m_time) * 1E-9;
-    m_data->dynamicsWorld->stepSimulation(timeDelta, 10, SUB_TIMESTEP);
+    m_data->dynamicsWorld->stepSimulation(timeDelta, 200, 0.0001f);   
     m_time = current_time;
 
     // only send a vision packet every third frame = 15 ms - epsilon (=half frame)
