@@ -100,7 +100,6 @@ private:
         float angle;
         btVector3 pos;
         btVector3 dir;
-        std::array<float, 16> rollerOmega{}; // Angular velocity of each physical roller
     };
 
     sslsim::TeleportRobot m_move;
