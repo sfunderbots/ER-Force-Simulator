@@ -629,7 +629,6 @@ void SimRobot::applyWheelForces(float time)
     // Calculate the minimum-norm contact forces needed to stop the current
     // translational and rotational motion during this timestep. If those
     // forces fit inside every wheel's Coulomb limit, the contact sticks.
-    const float invMass = 1.0f / m_specs.mass();
     const float invIz = m_body->getInvInertiaDiagLocal().z();
 
     if (invIz <= 0.0f) {
@@ -672,7 +671,7 @@ void SimRobot::applyWheelForces(float time)
         };
     } else {
         // Sliding branch. Coulomb friction opposes the actual transverse
-        // slip velocity. No tanh/atan velocity regularization is used.
+        // slip velocity. No velocity regularization is used.
         for (std::size_t i = 0; i < m_wheels.size(); ++i) {
             contactForce[i] =
                 (std::abs(slip[i]) < 1.0e-9f)
