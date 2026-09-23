@@ -179,7 +179,7 @@ SimRobot::SimRobot(RNG *rng, const robot::Specs &specs, btDiscreteDynamicsWorld 
                     << ",w" << i << "_mu"
                     << ",w" << i << "_transverse_force";
             }
-            m_wheelPhysicsLog << '\\n';
+            m_wheelPhysicsLog << '\n';
         }
     }
 //    reportAccelerationLimits();
@@ -623,6 +623,7 @@ void SimRobot::applyWheelForces(float time)
     btVector3 totalTorqueLocal(0.0f, 0.0f, 0.0f);
     std::array<float, 4> wheelPhase{};
     std::array<int, 4> wheelRollerContact{};
+    std::array<float, 4> wheelTransverseSlip{};
     std::array<float, 4> wheelMu{};
     std::array<float, 4> wheelForce{};
 
@@ -656,6 +657,7 @@ void SimRobot::applyWheelForces(float time)
 
         const float transverseSlip =
             wheelVelocityLocal.dot(transverseDir);
+        wheelTransverseSlip[i] = transverseSlip;
 
         // The simulator does not model individual wheel motors or wheel
         // inertia. Keep the wheel kinematic in its rolling direction, so
@@ -730,7 +732,7 @@ void SimRobot::applyWheelForces(float time)
                 << ',' << m_wheels[i].angle
                 << ',' << wheelPhase[i]
                 << ',' << wheelRollerContact[i]
-                << ',' << transverseSlip[i]
+                << ',' << wheelTransverseSlip[i]
                 << ',' << wheelMu[i]
                 << ',' << wheelForce[i];
         }
