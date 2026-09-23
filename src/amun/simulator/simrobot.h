@@ -26,6 +26,7 @@
 #include "protobuf/sslsim.h"
 #include <QList>
 #include <array>
+#include <fstream>
 #include <Eigen/Dense>
 #include <Eigen/QR>
 #include <btBulletDynamicsCommon.h>
@@ -119,6 +120,8 @@ private:
     qint64 m_lastSendTime = 0;
 
     std::array<Wheel, 4> m_wheels{};
+    std::ofstream m_wheelPhysicsLog;
+    double m_wheelPhysicsLogTime = 0.0;
 
     Eigen::Matrix<float, 4, 3> m_velocityCoupling;
     Eigen::CompleteOrthogonalDecomposition<Eigen::Matrix<float, 4, 3>> m_inverseCoupling;
