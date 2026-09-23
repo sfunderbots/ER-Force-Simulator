@@ -650,7 +650,7 @@ void SimRobot::applyWheelForces(float time)
         -generalizedVelocity.z() / invIz / time
     };
 
-    const Eigen::Vector3f staticSolution =
+    const Eigen::Vector4f staticSolution =
         A.transpose() * AAT.inverse() * generalizedForce;
 
     bool canStick = true;
