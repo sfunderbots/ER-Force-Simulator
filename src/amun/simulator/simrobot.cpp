@@ -28,6 +28,7 @@
 #include "simulator.h"
 #include <algorithm>
 #include <cmath>
+#include <iomanip>
 #include <QDebug>
 
 using namespace camun::simulator;
@@ -66,6 +67,7 @@ namespace {
     constexpr float KINEMATIC_WHEEL_RADIUS = WHEEL_DIAMETER / 2.0f;
     constexpr float WHEEL_CENTER_RADIUS =
         WHEEL_COUPLING_PHI * M_PI * WHEEL_DIAMETER;
+    constexpr bool ENABLE_WHEEL_PHYSICS_LOG = true;
 
 } // namespace
 
@@ -158,6 +160,28 @@ SimRobot::SimRobot(RNG *rng, const robot::Specs &specs, btDiscreteDynamicsWorld 
     m_world->addConstraint(m_dribblerConstraint, true);
 
     generateVelocityCoupling();
+
+    if (ENABLE_WHEEL_PHYSICS_LOG) {
+        const std::string logName =
+            "wheel_physics_robot_"
+            + std::to_string(m_specs.id())
+            + ".csv";
+        m_wheelPhysicsLog.open(logName, std::ios::out | std::ios::trunc);
+        if (m_wheelPhysicsLog) {
+            m_wheelPhysicsLog
+                << "time,robot_vx,robot_vy,robot_omega,total_fx,total_fy,total_tz";
+            for (std::size_t i = 0; i < m_wheels.size(); ++i) {
+                m_wheelPhysicsLog
+                    << ",w" << i << "_angle_rad"
+                    << ",w" << i << "_phase_rad"
+                    << ",w" << i << "_roller_contact"
+                    << ",w" << i << "_transverse_slip"
+                    << ",w" << i << "_mu"
+                    << ",w" << i << "_transverse_force";
+            }
+            m_wheelPhysicsLog << '\\n';
+        }
+    }
 //    reportAccelerationLimits();
 }
 
@@ -531,12 +555,16 @@ void SimRobot::generateVelocityCoupling()
     // parameters for generation 2014
     // taken from the firmware velocity controller (and adapted to rps instead of rpm)
     const float d = WHEEL_DIAMETER;
+    // Physical wheel angles are 60 degrees front and 45 degrees rear,
+    // measured clockwise from the robot's forward direction. The simulator
+    // coupling vector is measured from +x, so the 60 degree front angle is
+    // represented by 90 - 60 = 30 degrees here.
     const float X_FRONT =
-        1.0f / M_PI / d * std::cos(35.0f / 360.0f * 2 * M_PI);
+        1.0f / M_PI / d * std::cos(30.0f / 360.0f * 2 * M_PI);
     const float X_REAR =
         1.0f / M_PI / d * std::cos(45.0f / 360.0f * 2 * M_PI);
     const float Y_FRONT =
-        1.0f / M_PI / d * std::sin(35.0f / 360.0f * 2 * M_PI);
+        1.0f / M_PI / d * std::sin(30.0f / 360.0f * 2 * M_PI);
     const float Y_REAR =
         1.0f / M_PI / d * std::sin(45.0f / 360.0f * 2 * M_PI);
     const float PHI = WHEEL_COUPLING_PHI;
@@ -593,6 +621,10 @@ void SimRobot::applyWheelForces(float time)
 
     btVector3 totalForceLocal(0.0f, 0.0f, 0.0f);
     btVector3 totalTorqueLocal(0.0f, 0.0f, 0.0f);
+    std::array<float, 4> wheelPhase{};
+    std::array<int, 4> wheelRollerContact{};
+    std::array<float, 4> wheelMu{};
+    std::array<float, 4> wheelForce{};
 
     const auto frictionCoefficient =
         [](float maxCoefficient, float slipSpeed) {
@@ -639,9 +671,11 @@ void SimRobot::applyWheelForces(float time)
         // Select roller or rigid material for the current contact sector.
         const float phase =
             std::remainder(wheel.angle, ROLLER_PITCH);
+        wheelPhase[i] = phase;
         const bool rollerContact =
             std::abs(phase)
             <= 0.5f * ROLLER_CONTACT_FRACTION * ROLLER_PITCH;
+        wheelRollerContact[i] = rollerContact ? 1 : 0;
 
         const float maxTransverseCoefficient =
             rollerContact
@@ -653,6 +687,7 @@ void SimRobot::applyWheelForces(float time)
                 maxTransverseCoefficient,
                 transverseSlip
             );
+        wheelMu[i] = transverseCoefficient;
 
         // Equation (8)/(11) of Williams et al.: friction opposes the
         // signed sliding velocity, with a smooth arctan coefficient.
@@ -662,6 +697,7 @@ void SimRobot::applyWheelForces(float time)
                 : -normalForce
                     * transverseCoefficient
                     * std::copysign(1.0f, transverseSlip);
+        wheelForce[i] = transverseForce;
 
         // Rolling-direction slip is zero with the current kinematic wheel
         // representation, so the Williams rolling coefficient contributes
@@ -675,6 +711,30 @@ void SimRobot::applyWheelForces(float time)
 
         totalForceLocal += forceLocal;
         totalTorqueLocal += wheel.pos.cross(forceLocal);
+    }
+
+    if (m_wheelPhysicsLog) {
+        m_wheelPhysicsLogTime += time;
+        m_wheelPhysicsLog
+            << std::setprecision(9)
+            << m_wheelPhysicsLogTime << ','
+            << linearVelocityLocal.x() << ','
+            << linearVelocityLocal.y() << ','
+            << robotOmega << ','
+            << totalForceLocal.x() << ','
+            << totalForceLocal.y() << ','
+            << totalTorqueLocal.z();
+
+        for (std::size_t i = 0; i < m_wheels.size(); ++i) {
+            m_wheelPhysicsLog
+                << ',' << m_wheels[i].angle
+                << ',' << wheelPhase[i]
+                << ',' << wheelRollerContact[i]
+                << ',' << transverseSlip[i]
+                << ',' << wheelMu[i]
+                << ',' << wheelForce[i];
+        }
+        m_wheelPhysicsLog << '\\n';
     }
 
     if (totalForceLocal.length2() == 0.0f
