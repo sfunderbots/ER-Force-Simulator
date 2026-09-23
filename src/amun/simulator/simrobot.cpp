@@ -46,10 +46,6 @@ namespace {
     // Friction updates
     constexpr float MU_ROLLER = 0.05f;                  // Transverse roller friction (down from 0.10)
 
-    // Rotational dynamics (Calculated for 1.5g roller)
-    constexpr float ROLLER_INERTIA = 3.87e-8f;          // kg*m^2
-    constexpr float ROLLER_BEARING_DECEL = 40.0f;       // rad/s^2 freewheel deceleration
-
     constexpr float GRAVITY = 9.81f;
     constexpr float KINEMATIC_WHEEL_RADIUS = 0.0225f;
 
@@ -548,7 +544,6 @@ void SimRobot::generateVelocityCoupling()
         );
 
         m_wheels[i].angle = 0.0f;
-        m_wheels[i].rollerOmega.fill(0.0f);
     }
 }
 
@@ -579,10 +574,22 @@ void SimRobot::applyWheelForces(float time)
             linearVelocityLocal
             + robotOmega * btVector3(-wheel.pos.y(), wheel.pos.x(), 0.0f);
 
-        // Velocity in the wheel's rolling direction.
+        // Velocity components at the wheel contact:
+        // vDrive is along the driven wheel direction and vTransverse is
+        // along the wheel axle / passive-roller direction.
         const float vDrive = wheelVelocityLocal.dot(wheel.dir);
 
-        // Geometry of the current roller contact.
+        const btVector3 transverseDir(
+            wheel.dir.y(),
+            -wheel.dir.x(),
+            0.0f
+        );
+        const float vTransverse =
+            wheelVelocityLocal.dot(transverseDir);
+
+        // Sixteen physical rollers determine the instantaneous contact
+        // geometry.  The wheel phase is kinematic here: we deliberately do
+        // not introduce a separate roller inertia state.
         const float phi = std::remainder(wheel.angle, ROLLER_PITCH);
         const float sinPhi = std::sin(phi);
 
@@ -595,84 +602,25 @@ void SimRobot::applyWheelForces(float time)
             ROLLER_CIRCLE_RADIUS * std::cos(phi)
             + std::sqrt(std::max(0.0f, radialTerm));
 
-        // The simulator's drive model applies chassis forces rather than motor torque.
-        // Use the instantaneous contact geometry to obtain the wheel phase rate,
-        // keeping the wheel in pure rolling kinematics.
         const float wheelOmega =
             vDrive / std::max(effectiveRadius, 1.0e-6f);
         wheel.angle += wheelOmega * time;
 
-        // Which of the 16 physical rollers is currently at the contact point?
-        int rollerIndex = static_cast<int>(
-            std::floor(
-                (wheel.angle + 0.5f * ROLLER_PITCH) / ROLLER_PITCH
-            )
-        );
+        // Coulomb friction has a discontinuous sign law.  There is no tanh,
+        // velocity regularization, or fitted smoothing term here:
+        //
+        //     F_T = -mu_T * N * sign(v_T)
+        //
+        // At exactly zero transverse slip, the model assigns zero friction.
+        // The coefficient is currently a measured/identified-model parameter,
+        // not a claim that 0.05 is the physical coefficient of our wheel.
+        const float transverseForce =
+            (vTransverse == 0.0f)
+                ? 0.0f
+                : -MU_ROLLER * normalForce * std::copysign(1.0f, vTransverse);
 
-        rollerIndex %= N_ROLLERS;
-        if (rollerIndex < 0) {
-            rollerIndex += N_ROLLERS;
-        }
-
-        // Decelerate the 15 rollers that are not in contact with the ground.
-        for (int i = 0; i < N_ROLLERS; ++i) {
-            if (i == rollerIndex) continue;
-            float &om = wheel.rollerOmega[i];
-            const float decel = ROLLER_BEARING_DECEL * time;
-            if (om > 0.0f) {
-                om = std::max(0.0f, om - decel);
-            } else if (om < 0.0f) {
-                om = std::min(0.0f, om + decel);
-            }
-        }
-
-        // The existing simulator controller supplies the wheel drive force.
-        // No separate longitudinal tire force is added here.
-
-        // Roller axis / lateral direction.
-        const btVector3 lateralDir(
-            wheel.dir.y(),
-            -wheel.dir.x(),
-            0.0f
-        );
-
-        const float lateralVelocity =
-            wheelVelocityLocal.dot(lateralDir);
-
-        // The active roller's surface velocity
-        const float rollerSurfaceVelocity =
-            wheel.rollerOmega[rollerIndex] * ROLLER_RADIUS;
-
-        const float rollerSlip =
-            lateralVelocity - rollerSurfaceVelocity;
-
-        // Coulomb friction drives the active roller toward pure rolling.
-        // Integrate the roller angular velocity with a bounded step so the
-        // tiny roller inertia cannot cause an explicit-Euler oscillation.
-        const float targetRollerOmega =
-            lateralVelocity / ROLLER_RADIUS;
-        const float maxAngularStep =
-            (MU_ROLLER * normalForce * ROLLER_RADIUS / ROLLER_INERTIA) * time;
-        const float angularError =
-            targetRollerOmega - wheel.rollerOmega[rollerIndex];
-        const float angularStep =
-            std::copysign(
-                std::min(std::abs(angularError), maxAngularStep),
-                angularError
-            );
-
-        wheel.rollerOmega[rollerIndex] += angularStep;
-
-        // The actual force is the angular impulse required for this step.
-        // It never exceeds the Coulomb friction limit MU_ROLLER * normalForce.
-        const float rollerTorque =
-            ROLLER_INERTIA * angularStep / time;
-        const float lateralForce =
-            -rollerTorque / ROLLER_RADIUS;
-
-        // Combine forces to push/twist the robot chassis
         const btVector3 forceLocal =
-            lateralForce * lateralDir;
+            transverseForce * transverseDir;
 
         totalForceLocal += forceLocal;
 
