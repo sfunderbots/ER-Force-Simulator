@@ -40,22 +40,32 @@ namespace {
     // Williams et al. model the finite roller/gap geometry as an angular
     // sector around the wheel. We use the physically counted 16 rollers.
     constexpr int N_ROLLERS = 16;
-    constexpr float ROLLER_PITCH = 2.0f * M_PI / static_cast<float>(N_ROLLERS);
+    constexpr float ROLLER_PITCH =
+        2.0f * M_PI / static_cast<float>(N_ROLLERS);
     constexpr float ROLLER_CONTACT_FRACTION = 0.90f;
 
-    // Transverse friction reference values from Williams et al. (2002),
-    // measured on their carpet surface:
-    //   roller contact: 0.15
-    //   rigid material between rollers: 0.56
-    //
-    // These are literature reference values, NOT measurements of The Bots'
-    // wheel/field combination. They must eventually be replaced by our own
-    // measured coefficients.
+    // Friction reference values from Williams et al. (2002), measured on
+    // carpet. These are literature values, NOT measurements of The Bots'
+    // wheel/field combination.
+    constexpr float MU_ROLLER_ROLLING = 0.25f;
     constexpr float MU_ROLLER_TRANSVERSE = 0.15f;
+    constexpr float MU_RIGID_ROLLING = 0.56f;
     constexpr float MU_RIGID_TRANSVERSE = 0.56f;
 
+    // Williams et al. use this arctan friction law with k = 1000 for
+    // numerical stability around zero sliding velocity.
+    constexpr float FRICTION_VELOCITY_GAIN = 1000.0f;
+
+    // These values are already encoded in the existing wheel velocity
+    // coupling. Keep them as named geometry so wheel positions can be made
+    // consistent with that coupling instead of inventing a second geometry.
+    constexpr float WHEEL_DIAMETER = 0.045f;
+    constexpr float WHEEL_COUPLING_PHI = 29.7f / 60.0f;
+
     constexpr float GRAVITY = 9.81f;
-    constexpr float KINEMATIC_WHEEL_RADIUS = 0.0225f;
+    constexpr float KINEMATIC_WHEEL_RADIUS = WHEEL_DIAMETER / 2.0f;
+    constexpr float WHEEL_CENTER_RADIUS =
+        WHEEL_COUPLING_PHI * M_PI * WHEEL_DIAMETER;
 
 } // namespace
 
@@ -518,15 +528,18 @@ void SimRobot::begin(SimBall *ball, double time)
 void SimRobot::generateVelocityCoupling()
 {
     // TODO: configurable wheel angles
-    // parameters for generation 2014, d=0.045
+    // parameters for generation 2014
     // taken from the firmware velocity controller (and adapted to rps instead of rpm)
-    const float d = 0.045f;
-    const float X_FRONT = 1.0f / M_PI / d * std::cos(35.0f / 360.0f * 2 * M_PI);
-    const float X_REAR = 1.0f / M_PI / d * std::cos(45.0f / 360.0f * 2 * M_PI);
-    const float Y_FRONT = 1.0f / M_PI / d * std::sin(35.0f / 360.0f * 2 * M_PI);
-    const float Y_REAR = 1.0f / M_PI / d * std::sin(45.0f / 360.0f * 2 * M_PI);
-    // TODO: use robot radius to compute this
-    const float PHI = 29.7 / 60;
+    const float d = WHEEL_DIAMETER;
+    const float X_FRONT =
+        1.0f / M_PI / d * std::cos(35.0f / 360.0f * 2 * M_PI);
+    const float X_REAR =
+        1.0f / M_PI / d * std::cos(45.0f / 360.0f * 2 * M_PI);
+    const float Y_FRONT =
+        1.0f / M_PI / d * std::sin(35.0f / 360.0f * 2 * M_PI);
+    const float Y_REAR =
+        1.0f / M_PI / d * std::sin(45.0f / 360.0f * 2 * M_PI);
+    const float PHI = WHEEL_COUPLING_PHI;
 
     m_velocityCoupling.row(0) = Eigen::Vector3f{X_FRONT, Y_FRONT, -PHI};
     m_velocityCoupling.row(1) = Eigen::Vector3f{-X_REAR, Y_REAR, -PHI};
@@ -541,6 +554,21 @@ void SimRobot::generateVelocityCoupling()
         const float norm = std::hypot(dx, dy);
 
         m_wheels[i].dir = btVector3(dx / norm, dy / norm, 0.0f);
+
+        // Derive the wheel-center position from the existing velocity
+        // coupling. For each wheel, r is perpendicular to d, giving:
+        //
+        //   (r x d)_z / (pi * d) = -PHI
+        //
+        // Therefore the wheel-center radius is exactly 70 mm for the
+        // existing coupling, rather than introducing new geometry.
+        m_wheels[i].pos = btVector3(
+            -m_wheels[i].dir.y(),
+            m_wheels[i].dir.x(),
+            0.0f
+        ) * WHEEL_CENTER_RADIUS;
+
+        m_wheels[i].angle = 0.0f;
     }
 }
 
@@ -563,150 +591,111 @@ void SimRobot::applyWheelForces(float time)
         inverseBasis * linearVelocityWorld;
     const float robotOmega = m_body->getAngularVelocity().z();
 
-    // Each wheel contributes a scalar transverse contact force. Its
-    // generalized wrench is:
-    //
-    //   [ Fx ]
-    //   [ Fy ] = A_i * F_i
-    //   [ Tz ]
-    //
-    // This keeps the roller friction coupled to both translation and yaw,
-    // rather than treating each wheel as an independent linear brake.
-    Eigen::Matrix<float, 3, 4> A;
-    std::array<float, 4> slip{};
-    std::array<float, 4> maxForce{};
+    btVector3 totalForceLocal(0.0f, 0.0f, 0.0f);
+    btVector3 totalTorqueLocal(0.0f, 0.0f, 0.0f);
+
+    const auto frictionCoefficient =
+        [](float maxCoefficient, float slipSpeed) {
+            return maxCoefficient
+                * (2.0f / static_cast<float>(M_PI))
+                * std::atan(
+                    FRICTION_VELOCITY_GAIN * std::abs(slipSpeed)
+                );
+        };
 
     for (std::size_t i = 0; i < m_wheels.size(); ++i) {
         Wheel &wheel = m_wheels[i];
 
+        // Contact-point velocity from the robot translation and yaw.
         const btVector3 wheelVelocityLocal =
             linearVelocityLocal
-            + robotOmega * btVector3(-wheel.pos.y(), wheel.pos.x(), 0.0f);
+            + robotOmega * btVector3(
+                -wheel.pos.y(),
+                wheel.pos.x(),
+                0.0f
+            );
 
+        // Wheel axle direction is perpendicular to the rolling direction.
         const btVector3 transverseDir(
             wheel.dir.y(),
             -wheel.dir.x(),
             0.0f
         );
 
-        slip[i] = wheelVelocityLocal.dot(transverseDir);
+        const float transverseSlip =
+            wheelVelocityLocal.dot(transverseDir);
 
-        A(0, i) = transverseDir.x();
-        A(1, i) = transverseDir.y();
-        A(2, i) =
-            wheel.pos.x() * transverseDir.y()
-            - wheel.pos.y() * transverseDir.x();
+        // The simulator does not model individual wheel motors or wheel
+        // inertia. Keep the wheel kinematic in its rolling direction, so
+        // rolling-direction slip is zero. The phase still advances with
+        // the wheel's rolling motion so the 16 physical roller sectors are
+        // represented.
+        const float wheelDriveSpeed =
+            wheelVelocityLocal.dot(wheel.dir);
+        const float wheelOmega =
+            wheelDriveSpeed / KINEMATIC_WHEEL_RADIUS;
+        wheel.angle += wheelOmega * time;
 
-        // The current wheel phase selects which physical sector is touching
-        // the ground. Roller inertia is deliberately not introduced as a
-        // separate state.
+        // Select roller or rigid material for the current contact sector.
         const float phase =
             std::remainder(wheel.angle, ROLLER_PITCH);
         const bool rollerContact =
             std::abs(phase)
             <= 0.5f * ROLLER_CONTACT_FRACTION * ROLLER_PITCH;
 
-        const float muTransverse =
+        const float maxTransverseCoefficient =
             rollerContact
                 ? MU_ROLLER_TRANSVERSE
                 : MU_RIGID_TRANSVERSE;
 
-        maxForce[i] = muTransverse * normalForce;
+        const float transverseCoefficient =
+            frictionCoefficient(
+                maxTransverseCoefficient,
+                transverseSlip
+            );
 
-        // With the wheel treated kinematically, its phase advances at the
-        // angular speed required for rolling in the driven direction.
-        const float wheelDriveSpeed =
-            wheelVelocityLocal.dot(wheel.dir);
-        const float wheelOmega =
-            wheelDriveSpeed / KINEMATIC_WHEEL_RADIUS;
-        wheel.angle += wheelOmega * time;
+        // Equation (8)/(11) of Williams et al.: friction opposes the
+        // signed sliding velocity, with a smooth arctan coefficient.
+        const float transverseForce =
+            (std::abs(transverseSlip) < 1.0e-9f)
+                ? 0.0f
+                : -normalForce
+                    * transverseCoefficient
+                    * std::copysign(1.0f, transverseSlip);
+
+        // Rolling-direction slip is zero with the current kinematic wheel
+        // representation, so the Williams rolling coefficient contributes
+        // no force here. Keep the measured values defined above because
+        // they are part of the model when wheel dynamics are added.
+        (void)MU_ROLLER_ROLLING;
+        (void)MU_RIGID_ROLLING;
+
+        const btVector3 forceLocal =
+            transverseDir * transverseForce;
+
+        totalForceLocal += forceLocal;
+        totalTorqueLocal += wheel.pos.cross(forceLocal);
     }
 
-    const Eigen::Matrix3f AAT = A * A.transpose();
-    const float det = AAT.determinant();
-    if (std::abs(det) < 1.0e-9f) {
-        return;
-    }
-
-    // Static Coulomb friction is a set-valued constraint at zero slip.
-    // Calculate the minimum-norm contact forces needed to stop the current
-    // translational and rotational motion during this timestep. If those
-    // forces fit inside every wheel's Coulomb limit, the contact sticks.
-    const float invIz = m_body->getInvInertiaDiagLocal().z();
-
-    if (invIz <= 0.0f) {
-        return;
-    }
-
-    const Eigen::Vector3f generalizedVelocity{
-        linearVelocityLocal.x(),
-        linearVelocityLocal.y(),
-        robotOmega
-    };
-
-    const Eigen::Vector3f generalizedForce{
-        -m_specs.mass() * generalizedVelocity.x() / time,
-        -m_specs.mass() * generalizedVelocity.y() / time,
-        -generalizedVelocity.z() / invIz / time
-    };
-
-    const Eigen::Vector4f staticSolution =
-        A.transpose() * AAT.inverse() * generalizedForce;
-
-    bool canStick = true;
-    for (std::size_t i = 0; i < m_wheels.size(); ++i) {
-        if (std::abs(staticSolution[i]) > maxForce[i]) {
-            canStick = false;
-            break;
-        }
-    }
-
-    std::array<float, 4> contactForce{};
-    if (canStick) {
-        // Sticking branch. This is static Coulomb friction, not numerical
-        // smoothing. At exactly zero velocity the required force is zero,
-        // so the robot remains exactly at rest instead of chattering.
-        contactForce = {
-            staticSolution[0],
-            staticSolution[1],
-            staticSolution[2],
-            staticSolution[3]
-        };
-    } else {
-        // Sliding branch. Coulomb friction opposes the actual transverse
-        // slip velocity. No velocity regularization is used.
-        for (std::size_t i = 0; i < m_wheels.size(); ++i) {
-            contactForce[i] =
-                (std::abs(slip[i]) < 1.0e-9f)
-                    ? 0.0f
-                    : -maxForce[i] * std::copysign(1.0f, slip[i]);
-        }
-    }
-
-    Eigen::Vector3f totalWrench = A * Eigen::Map<Eigen::Vector4f>(contactForce.data());
-
-    if (totalWrench.squaredNorm() == 0.0f) {
+    if (totalForceLocal.length2() == 0.0f
+        && totalTorqueLocal.length2() == 0.0f) {
         return;
     }
 
     m_body->activate();
 
     m_body->applyCentralForce(
-        basis * btVector3(
-            totalWrench.x(),
-            totalWrench.y(),
-            0.0f
-        ) * SIMULATOR_SCALE
+        basis * totalForceLocal * SIMULATOR_SCALE
     );
 
     m_body->applyTorque(
-        basis * btVector3(
-            0.0f,
-            0.0f,
-            totalWrench.z()
-        ) * SIMULATOR_SCALE * SIMULATOR_SCALE
+        basis
+        * totalTorqueLocal
+        * SIMULATOR_SCALE
+        * SIMULATOR_SCALE
     );
 }
+
 Eigen::Vector3f SimRobot::limitAcceleration(float a_f, float a_s, float a_phi, float v_f, float v_s, float omega) const
 {
     const float wheelAccel = m_specs.simulation_limits().a_speedup_wheel_max();
