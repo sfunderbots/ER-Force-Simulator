@@ -736,7 +736,7 @@ void SimRobot::applyWheelForces(float time)
                 << ',' << wheelMu[i]
                 << ',' << wheelForce[i];
         }
-        m_wheelPhysicsLog << '\\n';
+        m_wheelPhysicsLog << '\n';
     }
 
     if (totalForceLocal.length2() == 0.0f
