@@ -574,22 +574,18 @@ void SimRobot::applyWheelForces(float time)
             linearVelocityLocal
             + robotOmega * btVector3(-wheel.pos.y(), wheel.pos.x(), 0.0f);
 
-        // Velocity components at the wheel contact:
-        // vDrive is along the driven wheel direction and vTransverse is
-        // along the wheel axle / passive-roller direction.
-        const float vDrive = wheelVelocityLocal.dot(wheel.dir);
-
         const btVector3 transverseDir(
             wheel.dir.y(),
             -wheel.dir.x(),
             0.0f
         );
+
         const float vTransverse =
             wheelVelocityLocal.dot(transverseDir);
 
-        // Sixteen physical rollers determine the instantaneous contact
-        // geometry.  The wheel phase is kinematic here: we deliberately do
-        // not introduce a separate roller inertia state.
+        // Sixteen physical rollers are represented kinematically. The
+        // instantaneous roller phase determines the contact geometry.
+        // Roller inertia is deliberately not a separate state.
         const float phi = std::remainder(wheel.angle, ROLLER_PITCH);
         const float sinPhi = std::sin(phi);
 
@@ -602,44 +598,33 @@ void SimRobot::applyWheelForces(float time)
             ROLLER_CIRCLE_RADIUS * std::cos(phi)
             + std::sqrt(std::max(0.0f, radialTerm));
 
+        const float vDrive = wheelVelocityLocal.dot(wheel.dir);
         const float wheelOmega =
             vDrive / std::max(effectiveRadius, 1.0e-6f);
         wheel.angle += wheelOmega * time;
 
-        // Coulomb friction has a discontinuous sign law.  There is no tanh,
-        // velocity regularization, or fitted smoothing term here:
-        //
-        //     F_T = -mu_T * N * sign(v_T)
-        //
-        // At exactly zero transverse slip, the model assigns zero friction.
-        // The coefficient is currently a measured/identified-model parameter,
-        // not a claim that 0.05 is the physical coefficient of our wheel.
+        // Pure Coulomb transverse friction. There is no tanh smoothing,
+        // fitted velocity regularization, or artificial roller damping.
+        // MU_ROLLER is an explicit measurable model parameter.
         const float transverseForce =
             (vTransverse == 0.0f)
                 ? 0.0f
-                : -MU_ROLLER * normalForce * std::copysign(1.0f, vTransverse);
+                : -MU_ROLLER * normalForce
+                    * std::copysign(1.0f, vTransverse);
 
         const btVector3 forceLocal =
             transverseForce * transverseDir;
 
         totalForceLocal += forceLocal;
-
         totalTorqueLocal +=
             wheel.pos.x() * forceLocal.y()
             - wheel.pos.y() * forceLocal.x();
     }
 
-    if (totalForceLocal.length2() == 0.0f
-            && totalTorqueLocal == 0.0f) {
-        return;
-    }
-
     m_body->activate();
-
     m_body->applyCentralForce(
         basis * (totalForceLocal * SIMULATOR_SCALE)
     );
-
     m_body->applyTorque(
         basis * btVector3(
             0.0f,
