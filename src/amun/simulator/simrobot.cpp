@@ -584,8 +584,9 @@ void SimRobot::applyWheelForces(float time)
         // Velocity in the wheel's rolling direction.
         const float vDrive = wheelVelocityLocal.dot(wheel.dir);
 
-        // Hub/wheel angular velocity is dictated by the motor, NOT chassis kinematics.
-        const float wheelOmega = wheel.motorOmega;
+        // The simulator's drive model applies chassis forces rather than motor torque,
+        // so wheel rotation is determined by the actual contact kinematics.
+        const float wheelOmega = vDrive / WHEEL_RADIUS;
         wheel.angle += wheelOmega * time;
 
         // Which of the 16 physical rollers is currently at the contact point?
