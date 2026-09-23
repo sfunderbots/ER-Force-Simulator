@@ -541,6 +541,9 @@ void SimRobot::generateVelocityCoupling()
         const float norm = std::hypot(dx, dy);
 
         m_wheels[i].dir = btVector3(dx / norm, dy / norm, 0.0f);
+    }
+}
+
 void SimRobot::applyWheelForces(float time)
 {
     if (time <= 0.0f) {
