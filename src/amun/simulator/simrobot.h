@@ -100,8 +100,7 @@ private:
         float angle;
         btVector3 pos;
         btVector3 dir;
-        std::array<float, 16> rollerOmega{}; // Tracks the spin rate of each of the 16 rollers
-        float motorOmega = 0.0f;             // The target speed driven by your controller/joystick
+        std::array<float, 16> rollerOmega{}; // Angular velocity of each physical roller
     };
 
     sslsim::TeleportRobot m_move;
