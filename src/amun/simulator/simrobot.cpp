@@ -45,6 +45,7 @@ namespace {
 
     // Friction updates
     constexpr float MU_ROLLER = 0.05f;                  // Transverse roller friction (down from 0.10)
+    constexpr float FRICTION_REGULARIZATION_VELOCITY = 0.001f; // Numerical regularization only
 
     // Rotational dynamics (Calculated for 1.5g roller)
     constexpr float ROLLER_INERTIA = 3.87e-8f;          // kg*m^2
@@ -652,7 +653,7 @@ void SimRobot::applyWheelForces(float time)
             * rollerSlip
             / std::sqrt(
                 rollerSlip * rollerSlip
-                + SMOOTHING_VELOCITY * SMOOTHING_VELOCITY
+                + FRICTION_REGULARIZATION_VELOCITY * FRICTION_REGULARIZATION_VELOCITY
             );
 
         // Roller torque accelerates the individual roller
