@@ -45,8 +45,6 @@ namespace {
 
     // Friction updates
     constexpr float MU_ROLLER = 0.05f;                  // Transverse roller friction (down from 0.10)
-    constexpr float MU_ROLLING = 0.85f;                 // Drive-direction traction friction (up from 0.70)
-    constexpr float SMOOTHING_VELOCITY = 0.03f;         // Tanh smoothing
 
     // Rotational dynamics (Calculated for 1.5g roller)
     constexpr float ROLLER_INERTIA = 3.87e-8f;          // kg*m^2
@@ -337,7 +335,7 @@ bool SimRobot::handleMoveCommand()
 
             m_body->activate();
             m_dribblerBody->activate();
-            m_body->setDamping(0.0, 0.0);
+            m_body->setDamping(0.7, 0.8);
             m_dribblerBody->setDamping(0.0, 0.0);
             m_move.Clear(); // clear move command
             // reset is neccessary, as the command is only sent once
@@ -584,9 +582,24 @@ void SimRobot::applyWheelForces(float time)
         // Velocity in the wheel's rolling direction.
         const float vDrive = wheelVelocityLocal.dot(wheel.dir);
 
-        // The simulator's drive model applies chassis forces rather than motor torque,
-        // so wheel rotation is determined by the actual contact kinematics.
-        const float wheelOmega = vDrive / WHEEL_RADIUS;
+        // Geometry of the current roller contact.
+        const float phi = std::remainder(wheel.angle, ROLLER_PITCH);
+        const float sinPhi = std::sin(phi);
+
+        const float radialTerm =
+            ROLLER_RADIUS * ROLLER_RADIUS
+            - ROLLER_CIRCLE_RADIUS * ROLLER_CIRCLE_RADIUS
+              * sinPhi * sinPhi;
+
+        const float effectiveRadius =
+            ROLLER_CIRCLE_RADIUS * std::cos(phi)
+            + std::sqrt(std::max(0.0f, radialTerm));
+
+        // The simulator's drive model applies chassis forces rather than motor torque.
+        // Use the instantaneous contact geometry to obtain the wheel phase rate,
+        // keeping the wheel in pure rolling kinematics.
+        const float wheelOmega =
+            vDrive / std::max(effectiveRadius, 1.0e-6f);
         wheel.angle += wheelOmega * time;
 
         // Which of the 16 physical rollers is currently at the contact point?
@@ -601,7 +614,7 @@ void SimRobot::applyWheelForces(float time)
             rollerIndex += N_ROLLERS;
         }
 
-        // NEW: Decelerate all 15 rollers that are NOT currently in contact with the ground
+        // Decelerate the 15 rollers that are not in contact with the ground.
         for (int i = 0; i < N_ROLLERS; ++i) {
             if (i == rollerIndex) continue;
             float &om = wheel.rollerOmega[i];
@@ -613,25 +626,8 @@ void SimRobot::applyWheelForces(float time)
             }
         }
 
-        // Geometry of the current roller contact.
-        const float phi = std::remainder(wheel.angle, ROLLER_PITCH);
-        const float sinPhi = std::sin(phi);
-
-        const float radialTerm =
-            ROLLER_RADIUS * ROLLER_RADIUS
-            - ROLLER_CIRCLE_RADIUS * ROLLER_CIRCLE_RADIUS
-              * sinPhi * sinPhi;
-
-        const float effectiveRadius =
-            ROLLER_CIRCLE_RADIUS * std::cos(phi)
-            + std::sqrt(std::max(0.0f, radialTerm));
-
-        const float drivenSurfaceVelocity =
-            wheelOmega * effectiveRadius;
-
-        // Longitudinal slip is the difference between motor-driven surface speed and actual ground speed
-        const float longitudinalSlip =
-            vDrive - drivenSurfaceVelocity;
+        // The existing simulator controller supplies the wheel drive force.
+        // No separate longitudinal tire force is added here.
 
         // Roller axis / lateral direction.
         const btVector3 lateralDir(
@@ -649,15 +645,6 @@ void SimRobot::applyWheelForces(float time)
 
         const float rollerSlip =
             lateralVelocity - rollerSurfaceVelocity;
-
-        // Ordinary rolling resistance from the wheel/ground contact.
-        const float longitudinalForce =
-            -MU_ROLLING * normalForce
-            * longitudinalSlip
-            / std::sqrt(
-                longitudinalSlip * longitudinalSlip
-                + SMOOTHING_VELOCITY * SMOOTHING_VELOCITY
-            );
 
         // Lateral friction force acting on the roller.
         const float lateralForce =
@@ -680,8 +667,7 @@ void SimRobot::applyWheelForces(float time)
 
         // Combine forces to push/twist the robot chassis
         const btVector3 forceLocal =
-            longitudinalForce * wheel.dir
-            + lateralForce * lateralDir;
+            lateralForce * lateralDir;
 
         totalForceLocal += forceLocal;
 
