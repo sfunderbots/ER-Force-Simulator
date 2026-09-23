@@ -560,16 +560,18 @@ void SimRobot::applyWheelForces(float time)
         inverseBasis * linearVelocityWorld;
     const float robotOmega = m_body->getAngularVelocity().z();
 
-    std::array<btVector3, 4> transverseDirs{};
-    std::array<float, 4> vTransverse{};
-    std::array<float, 4> maxTransverseForce{};
-
-    // Build the wheel transverse-direction Gram matrix. This lets the
-    // static-friction branch distribute the force across all four wheels
-    // instead of giving every wheel a full copy of the robot's stopping force.
-    float gramXX = 0.0f;
-    float gramXY = 0.0f;
-    float gramYY = 0.0f;
+    // Each wheel contributes a scalar transverse contact force. Its
+    // generalized wrench is:
+    //
+    //   [ Fx ]
+    //   [ Fy ] = A_i * F_i
+    //   [ Tz ]
+    //
+    // This keeps the roller friction coupled to both translation and yaw,
+    // rather than treating each wheel as an independent linear brake.
+    Eigen::Matrix<float, 3, 4> A;
+    std::array<float, 4> slip{};
+    std::array<float, 4> maxForce{};
 
     for (std::size_t i = 0; i < m_wheels.size(); ++i) {
         Wheel &wheel = m_wheels[i];
@@ -578,14 +580,19 @@ void SimRobot::applyWheelForces(float time)
             linearVelocityLocal
             + robotOmega * btVector3(-wheel.pos.y(), wheel.pos.x(), 0.0f);
 
-        transverseDirs[i] = btVector3(
+        const btVector3 transverseDir(
             wheel.dir.y(),
             -wheel.dir.x(),
             0.0f
         );
 
-        vTransverse[i] =
-            wheelVelocityLocal.dot(transverseDirs[i]);
+        slip[i] = wheelVelocityLocal.dot(transverseDir);
+
+        A(0, i) = transverseDir.x();
+        A(1, i) = transverseDir.y();
+        A(2, i) =
+            wheel.pos.x() * transverseDir.y()
+            - wheel.pos.y() * transverseDir.x();
 
         // The current wheel phase selects which physical sector is touching
         // the ground. Roller inertia is deliberately not introduced as a
@@ -601,11 +608,7 @@ void SimRobot::applyWheelForces(float time)
                 ? MU_ROLLER_TRANSVERSE
                 : MU_RIGID_TRANSVERSE;
 
-        maxTransverseForce[i] = muTransverse * normalForce;
-
-        gramXX += transverseDirs[i].x() * transverseDirs[i].x();
-        gramXY += transverseDirs[i].x() * transverseDirs[i].y();
-        gramYY += transverseDirs[i].y() * transverseDirs[i].y();
+        maxForce[i] = muTransverse * normalForce;
 
         // With the wheel treated kinematically, its phase advances at the
         // angular speed required for rolling in the driven direction.
@@ -616,87 +619,92 @@ void SimRobot::applyWheelForces(float time)
         wheel.angle += wheelOmega * time;
     }
 
-    const float gramDet = gramXX * gramYY - gramXY * gramXY;
-    if (std::abs(gramDet) < 1.0e-9f) {
+    const Eigen::Matrix3f AAT = A * A.transpose();
+    const float det = AAT.determinant();
+    if (std::abs(det) < 1.0e-9f) {
         return;
     }
 
-    const float invGramXX = gramYY / gramDet;
-    const float invGramXY = -gramXY / gramDet;
-    const float invGramYY = gramXX / gramDet;
+    // Static Coulomb friction is a set-valued constraint at zero slip.
+    // Calculate the minimum-norm contact forces needed to stop the current
+    // translational and rotational motion during this timestep. If those
+    // forces fit inside every wheel's Coulomb limit, the contact sticks.
+    const float invMass = 1.0f / m_specs.mass();
+    const float invIz = m_body->getInvInertiaDiagLocal().z();
 
-    btVector3 totalForceLocal(0.0f, 0.0f, 0.0f);
+    if (invIz <= 0.0f) {
+        return;
+    }
 
+    const Eigen::Vector3f generalizedVelocity{
+        linearVelocityLocal.x(),
+        linearVelocityLocal.y(),
+        robotOmega
+    };
+
+    const Eigen::Vector3f generalizedForce{
+        -m_specs.mass() * generalizedVelocity.x() / time,
+        -m_specs.mass() * generalizedVelocity.y() / time,
+        -generalizedVelocity.z() / invIz / time
+    };
+
+    const Eigen::Vector3f staticSolution =
+        A.transpose() * AAT.inverse() * generalizedForce;
+
+    bool canStick = true;
     for (std::size_t i = 0; i < m_wheels.size(); ++i) {
-        const btVector3 &transverseDir = transverseDirs[i];
-        const float slipSpeed = vTransverse[i];
-
-        // Static Coulomb friction is not a unique function of velocity at
-        // zero slip. It can take any value up to mu*N while maintaining
-        // no-slip contact. We therefore first calculate the static force
-        // required to remove the current transverse velocity in this
-        // timestep, and only saturate to kinetic Coulomb friction when that
-        // requirement exceeds the available friction.
-        //
-        // This is a discrete-time contact formulation of Coulomb friction,
-        // not a smoothing function.
-        const float correctedVX =
-            invGramXX * linearVelocityLocal.x()
-            + invGramXY * linearVelocityLocal.y();
-        const float correctedVY =
-            invGramXY * linearVelocityLocal.x()
-            + invGramYY * linearVelocityLocal.y();
-
-        const float staticForce =
-            -m_specs.mass() / time
-            * (transverseDir.x() * correctedVX
-               + transverseDir.y() * correctedVY);
-
-        float transverseForce;
-        if (std::abs(staticForce) <= maxTransverseForce[i]) {
-            // Static/sticking branch: any value inside the Coulomb limit is
-            // physically admissible, and this is the value required to hold
-            // the current no-slip state for the timestep.
-            transverseForce = staticForce;
-        } else {
-            // Kinetic Coulomb branch: once the static requirement exceeds
-            // the available friction, friction opposes the actual slip.
-            transverseForce =
-                (slipSpeed == 0.0f)
-                    ? 0.0f
-                    : -maxTransverseForce[i]
-                        * std::copysign(1.0f, slipSpeed);
+        if (std::abs(staticSolution[i]) > maxForce[i]) {
+            canStick = false;
+            break;
         }
-
-        totalForceLocal += transverseForce * transverseDir;
     }
 
-    if (totalForceLocal.length2() == 0.0f) {
+    std::array<float, 4> contactForce{};
+    if (canStick) {
+        // Sticking branch. This is static Coulomb friction, not numerical
+        // smoothing. At exactly zero velocity the required force is zero,
+        // so the robot remains exactly at rest instead of chattering.
+        contactForce = {
+            staticSolution[0],
+            staticSolution[1],
+            staticSolution[2],
+            staticSolution[3]
+        };
+    } else {
+        // Sliding branch. Coulomb friction opposes the actual transverse
+        // slip velocity. No tanh/atan velocity regularization is used.
+        for (std::size_t i = 0; i < m_wheels.size(); ++i) {
+            contactForce[i] =
+                (std::abs(slip[i]) < 1.0e-9f)
+                    ? 0.0f
+                    : -maxForce[i] * std::copysign(1.0f, slip[i]);
+        }
+    }
+
+    Eigen::Vector3f totalWrench = A * Eigen::Map<Eigen::Vector4f>(contactForce.data());
+
+    if (totalWrench.squaredNorm() == 0.0f) {
         return;
     }
 
     m_body->activate();
-    m_body->applyCentralForce(
-        basis * (totalForceLocal * SIMULATOR_SCALE)
-    );
-}();
-    }
 
-    m_body->activate();
     m_body->applyCentralForce(
-        basis * (totalForceLocal * SIMULATOR_SCALE)
+        basis * btVector3(
+            totalWrench.x(),
+            totalWrench.y(),
+            0.0f
+        ) * SIMULATOR_SCALE
     );
+
     m_body->applyTorque(
         basis * btVector3(
             0.0f,
             0.0f,
-            totalTorqueLocal
-                * SIMULATOR_SCALE
-                * SIMULATOR_SCALE
-        )
+            totalWrench.z()
+        ) * SIMULATOR_SCALE * SIMULATOR_SCALE
     );
 }
-
 Eigen::Vector3f SimRobot::limitAcceleration(float a_f, float a_s, float a_phi, float v_f, float v_s, float omega) const
 {
     const float wheelAccel = m_specs.simulation_limits().a_speedup_wheel_max();
