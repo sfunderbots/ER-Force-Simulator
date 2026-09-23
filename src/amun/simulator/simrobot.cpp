@@ -45,7 +45,6 @@ namespace {
 
     // Friction updates
     constexpr float MU_ROLLER = 0.05f;                  // Transverse roller friction (down from 0.10)
-    constexpr float FRICTION_REGULARIZATION_VELOCITY = 0.001f; // Numerical regularization only
 
     // Rotational dynamics (Calculated for 1.5g roller)
     constexpr float ROLLER_INERTIA = 3.87e-8f;          // kg*m^2
@@ -647,24 +646,29 @@ void SimRobot::applyWheelForces(float time)
         const float rollerSlip =
             lateralVelocity - rollerSurfaceVelocity;
 
-        // Lateral friction force acting on the roller.
-        const float lateralForce =
-            -MU_ROLLER * normalForce
-            * rollerSlip
-            / std::sqrt(
-                rollerSlip * rollerSlip
-                + FRICTION_REGULARIZATION_VELOCITY * FRICTION_REGULARIZATION_VELOCITY
+        // Coulomb friction drives the active roller toward pure rolling.
+        // Integrate the roller angular velocity with a bounded step so the
+        // tiny roller inertia cannot cause an explicit-Euler oscillation.
+        const float targetRollerOmega =
+            lateralVelocity / ROLLER_RADIUS;
+        const float maxAngularStep =
+            (MU_ROLLER * normalForce * ROLLER_RADIUS / ROLLER_INERTIA) * time;
+        const float angularError =
+            targetRollerOmega - wheel.rollerOmega[rollerIndex];
+        const float angularStep =
+            std::copysign(
+                std::min(std::abs(angularError), maxAngularStep),
+                angularError
             );
 
-        // Roller torque accelerates the individual roller
+        wheel.rollerOmega[rollerIndex] += angularStep;
+
+        // The actual force is the angular impulse required for this step.
+        // It never exceeds the Coulomb friction limit MU_ROLLER * normalForce.
         const float rollerTorque =
-            -lateralForce * ROLLER_RADIUS;
-
-        const float rollerAngularAcceleration =
-            rollerTorque / ROLLER_INERTIA;
-
-        wheel.rollerOmega[rollerIndex] +=
-            rollerAngularAcceleration * time;
+            ROLLER_INERTIA * angularStep / time;
+        const float lateralForce =
+            -rollerTorque / ROLLER_RADIUS;
 
         // Combine forces to push/twist the robot chassis
         const btVector3 forceLocal =
